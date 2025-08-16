@@ -3,6 +3,7 @@ import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
+import jwt from "jsonwebtoken";
 
 dotenv.config();
 
@@ -51,7 +52,6 @@ app.get("/", (req, res) => {
 });
 
 // Example auth route (JWT protected, expand later)
-import jwt from "jsonwebtoken";
 app.get("/protected", (req, res) => {
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "No token provided" });
@@ -68,8 +68,13 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Something went wrong" });
 });
 
-// Start server
+// Start server with clear source logging
+let portSource = "default (3000)";
+if (process.env.PORT) {
+  portSource = process.env.FLY_APP_NAME ? "Fly (injected)" : ".env/local";
+}
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, "0.0.0.0", () =>
-  console.log(`🚀 Server running on port ${PORT}`)
+  console.log(`🚀 Server running on port ${PORT} [${portSource}]`)
 );
