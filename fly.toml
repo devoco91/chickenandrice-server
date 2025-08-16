@@ -1,8 +1,3 @@
-# fly.toml app configuration file generated for fastfolderbackend on 2025-08-16T12:56:52+01:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
 app = 'fastfolderbackend'
 primary_region = 'jnb'
 
@@ -22,4 +17,4 @@ primary_region = 'jnb'
   cpus = 1
 
 [processes]
-  app = "node server.js"
+  app = "npm start"
