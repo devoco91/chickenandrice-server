@@ -20,6 +20,7 @@ const allowedOrigins = [
   /\.chickenandrice\.net$/,
   "http://localhost:3000",   // ✅ for local frontend dev
   "http://127.0.0.1:3000",   // ✅ some browsers resolve localhost as 127.0.0.1
+  "https://chickenandrice.vercel.app/"
 ];
 app.use(
   cors({
