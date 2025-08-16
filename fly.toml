@@ -1,3 +1,4 @@
+# fly.toml app configuration file
 app = 'fastfolderbackend'
 primary_region = 'jnb'
 
