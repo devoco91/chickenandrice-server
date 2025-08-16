@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -9,50 +10,66 @@ const app = express();
 
 // Middleware
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// ✅ CORS setup – only allow your frontend
+// CORS setup (allow main + www + subdomains)
 const allowedOrigins = [
   "https://chickenandrice.net",
   "https://www.chickenandrice.net",
-  "http://localhost:3000" // for local dev
+  /\.chickenandrice\.net$/,
 ];
+
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // allow curl / Postman
+      if (
+        allowedOrigins.includes(origin) ||
+        allowedOrigins.some((o) => o instanceof RegExp && o.test(origin))
+      ) {
+        return callback(null, true);
+      }
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   })
 );
 
-// ✅ MongoDB connection
+// Connect MongoDB
 const MONGO_URI = process.env.MONGO_URI;
 mongoose
-  .connect(MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("✅ Connected to MongoDB"))
+  .connect(MONGO_URI)
+  .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => {
     console.error("❌ MongoDB connection error:", err.message);
-    process.exit(1); // stop app if DB connection fails
+    process.exit(1);
   });
 
-// ✅ Routes
+// Sample route
 app.get("/", (req, res) => {
-  res.send("🚀 FastFolder Backend API is running on chickenandrice.net");
+  res.json({ message: "Welcome to Chicken & Rice API 🍚🍗" });
 });
 
-// Example protected route (JWT to be added later)
-app.get("/api/hello", (req, res) => {
-  res.json({ message: "Hello from FastFolder backend!" });
+// Example auth route (JWT protected, expand later)
+import jwt from "jsonwebtoken";
+app.get("/protected", (req, res) => {
+  const token = req.headers["authorization"]?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "No token provided" });
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(403).json({ error: "Invalid token" });
+    res.json({ message: "Protected route access granted", user: decoded });
+  });
 });
 
-// ✅ Health check (important for Fly.io / Vercel)
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok" });
+// Error handler
+app.use((err, req, res, next) => {
+  console.error("⚠️ Server error:", err.stack);
+  res.status(500).json({ error: "Something went wrong" });
 });
 
-// ✅ Start server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ Server running on port ${PORT}`);
-});
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () =>
+  console.log(`🚀 Server running on port ${PORT}`)
+);
