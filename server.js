@@ -13,19 +13,19 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// CORS setup (allow main + www + subdomains)
+// CORS setup
 const allowedOrigins = [
   "https://chickenandrice.net",
   "https://www.chickenandrice.net",
   /\.chickenandrice\.net$/,
-  "http://localhost:3000",   // ✅ for local frontend dev
-  "http://127.0.0.1:3000",   // ✅ some browsers resolve localhost as 127.0.0.1
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
   "https://chickenandrice.vercel.app/"
 ];
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin) return callback(null, true); // allow curl / Postman
+      if (!origin) return callback(null, true);
       if (
         allowedOrigins.includes(origin) ||
         allowedOrigins.some((o) => o instanceof RegExp && o.test(origin))
@@ -38,7 +38,7 @@ app.use(
   })
 );
 
-// Connect MongoDB
+// MongoDB connect
 const MONGO_URI = process.env.MONGO_URI;
 mongoose
   .connect(MONGO_URI)
@@ -48,12 +48,30 @@ mongoose
     process.exit(1);
   });
 
-// Sample route
+// =====================
+// Models
+// =====================
+const orderSchema = new mongoose.Schema(
+  {
+    item: { type: String, required: true },
+    status: { type: String, default: "pending" },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { collection: "orders" }
+);
+
+const Order = mongoose.model("Order", orderSchema);
+
+// =====================
+// Routes
+// =====================
+
+// Root test
 app.get("/", (req, res) => {
   res.json({ message: "Welcome to Chicken & Rice API 🍚🍗" });
 });
 
-// Example auth route (JWT protected, expand later)
+// Protected route example
 app.get("/protected", (req, res) => {
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "No token provided" });
@@ -64,13 +82,40 @@ app.get("/protected", (req, res) => {
   });
 });
 
+// Orders API
+app.get("/api/orders", async (req, res) => {
+  try {
+    const orders = await Order.find();
+    res.json(orders);
+  } catch (err) {
+    console.error("⚠️ Error fetching orders:", err);
+    res.status(500).json({ error: "Server error while fetching orders" });
+  }
+});
+
+app.post("/api/orders", async (req, res) => {
+  try {
+    const { item, status } = req.body;
+    const newOrder = new Order({ item, status });
+    const saved = await newOrder.save();
+    res.status(201).json(saved);
+  } catch (err) {
+    console.error("⚠️ Error creating order:", err);
+    res.status(400).json({ error: "Invalid order data" });
+  }
+});
+
+// =====================
 // Error handler
+// =====================
 app.use((err, req, res, next) => {
   console.error("⚠️ Server error:", err.stack);
   res.status(500).json({ error: "Something went wrong" });
 });
 
-// Start server with clear source logging
+// =====================
+// Start server
+// =====================
 let portSource = "default (3000)";
 if (process.env.PORT) {
   portSource = process.env.FLY_APP_NAME ? "Fly (injected)" : ".env/local";

@@ -9,42 +9,44 @@ const orderSchema = new mongoose.Schema(
         price: { type: Number, required: true },
       },
     ],
+
+    // Customer Info
     customerName: { type: String, required: true },
+    phone: { type: String, required: true },
     houseNumber: { type: String, required: true },
     street: { type: String, required: true },
     landmark: { type: String },
-    phone: { type: String, required: true },
+
+    // Financials
     subtotal: { type: Number, default: 0 },
     tax: { type: Number, default: 0 },
     deliveryFee: { type: Number, default: 0 },
     total: { type: Number, required: true },
+    paymentMode: { type: String, enum: ["cash", "card", "upi"], default: "cash" }, // 🔑 added for frontend compatibility
+    paymentStatus: { type: String, enum: ["unpaid", "paid"], default: "unpaid" },
+
     specialNotes: { type: String },
 
-
+    // Order Status
     status: {
       type: String,
       enum: ["pending", "assigned", "in-transit", "delivered", "cancelled", "completed"],
       default: "pending",
     },
 
-      assignedTo: {
+    // Delivery assignment
+    assignedTo: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Deliveryman",
     },
+    assignedToName: { type: String }, // denormalized for quick lookup
 
-    
-    assignedToName: { type: String },
-
-    paymentStatus: {
-      type: String,
-      enum: ["unpaid", "paid"],
-      default: "unpaid",
-    },
-
-    deliveryTime: { type: Date },
-    deliveryDate: { type: Date },
+    // Dates
     orderDate: { type: Date, default: Date.now },
+    deliveryDate: { type: Date },
+    deliveryTime: { type: Date },
 
+    // Geo location (optional)
     location: {
       lat: { type: Number },
       lng: { type: Number },

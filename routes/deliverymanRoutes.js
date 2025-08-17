@@ -5,7 +5,7 @@ const Deliveryman = require("../models/Deliveryman");
 
 const router = express.Router();
 
-// Middleware
+// 🔐 Auth Middleware
 function auth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ message: "No token provided" });
@@ -22,7 +22,10 @@ function auth(req, res, next) {
   }
 }
 
-// Signup
+/**
+ * @route   POST /api/delivery/signup
+ * @desc    Deliveryman signup
+ */
 router.post("/signup", async (req, res) => {
   try {
     const { name, email, phone, password, address, dateOfBirth } = req.body;
@@ -45,19 +48,25 @@ router.post("/signup", async (req, res) => {
       password: hashedPassword,
       address,
       dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
-      isOnline: false
+      isOnline: false,
     });
 
     await newDeliveryman.save();
 
-    res.status(201).json({ message: "Signup successful", deliveryman: newDeliveryman });
+    res.status(201).json({ 
+      message: "Signup successful", 
+      deliveryman: { ...newDeliveryman.toObject(), password: undefined } 
+    });
   } catch (error) {
     console.error("❌ Signup error:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// Login
+/**
+ * @route   POST /api/delivery/login
+ * @desc    Deliveryman login
+ */
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -73,14 +82,13 @@ router.post("/login", async (req, res) => {
       { expiresIn: "1d" }
     );
 
-
     const updatedDeliveryman = await Deliveryman.findByIdAndUpdate(
       deliveryman._id,
       { isOnline: true },
       { new: true }
-    );
+    ).select("-password");
 
-    console.log(`🟢 Deliveryman ${updatedDeliveryman.name} logged in and set to ONLINE:`, updatedDeliveryman.isOnline);
+    console.log(`🟢 ${updatedDeliveryman.name} logged in → ONLINE`);
 
     res.json({ token, deliveryman: updatedDeliveryman });
   } catch (err) {
@@ -89,7 +97,10 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// Logout 
+/**
+ * @route   POST /api/delivery/logout
+ * @desc    Logout deliveryman
+ */
 router.post("/logout", auth, async (req, res) => {
   try {
     const deliveryman = await Deliveryman.findById(req.deliverymanId);
@@ -105,7 +116,10 @@ router.post("/logout", auth, async (req, res) => {
   }
 });
 
-// Update online status 
+/**
+ * @route   PATCH /api/delivery/status
+ * @desc    Update deliveryman online status
+ */
 router.patch("/status", auth, async (req, res) => {
   try {
     const { isOnline } = req.body;
@@ -113,15 +127,15 @@ router.patch("/status", auth, async (req, res) => {
     
     if (!deliveryman) return res.status(404).json({ message: "Deliveryman not found" });
 
-    deliveryman.isOnline = isOnline;
+    deliveryman.isOnline = !!isOnline;
     await deliveryman.save();
 
-    console.log(`📦 Deliveryman ${deliveryman.name} status updated to: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
+    console.log(`📦 ${deliveryman.name} → ${isOnline ? "ONLINE" : "OFFLINE"}`);
 
     res.json({ 
       message: "Status updated successfully", 
       isOnline: deliveryman.isOnline,
-      deliveryman: deliveryman 
+      deliveryman: { ...deliveryman.toObject(), password: undefined } 
     });
   } catch (err) {
     console.error("❌ Status update error:", err);
@@ -129,7 +143,10 @@ router.patch("/status", auth, async (req, res) => {
   }
 });
 
-// Dashboard (protected route)
+/**
+ * @route   GET /api/delivery/dashboard
+ * @desc    Get deliveryman dashboard (protected)
+ */
 router.get("/dashboard", auth, async (req, res) => {
   try {
     const deliveryman = await Deliveryman.findById(req.deliverymanId).select("-password");
@@ -141,19 +158,18 @@ router.get("/dashboard", auth, async (req, res) => {
   }
 });
 
-// Get all 
+/**
+ * @route   GET /api/delivery
+ * @desc    Get all deliverymen (optionally filter by online status)
+ */
 router.get("/", async (req, res) => {
   try {
-
     const onlyOnline = req.query.online === "true" || req.query.isOnline === "true";
-
     const query = onlyOnline ? { isOnline: true } : {};
+    
     const deliverymen = await Deliveryman.find(query).select("-password");
 
-    console.log(`📋 Query: ${JSON.stringify(query)}, Found: ${deliverymen.length} deliverymen`);
-    if (onlyOnline) {
-      console.log(`🟢 Online deliverymen:`, deliverymen.map(d => `${d.name} (${d.isOnline})`));
-    }
+    console.log(`📋 Found ${deliverymen.length} deliverymen (query: ${JSON.stringify(query)})`);
 
     res.json(deliverymen);
   } catch (err) {

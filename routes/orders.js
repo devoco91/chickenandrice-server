@@ -3,12 +3,16 @@ const router = express.Router();
 const Order = require("../models/Order");
 const Deliveryman = require("../models/Deliveryman");
 
+// Middleware logger (helpful in dev)
 router.use((req, res, next) => {
   console.log(`📥 ${req.method} ${req.originalUrl}`);
   next();
 });
 
-// Create Order
+/**
+ * @route   POST /api/orders
+ * @desc    Create new order
+ */
 router.post("/", async (req, res) => {
   try {
     const {
@@ -19,7 +23,6 @@ router.post("/", async (req, res) => {
     if (!items || items.length === 0) {
       return res.status(400).json({ error: "Order must contain items" });
     }
-
     if (!customerName || !houseNumber || !street || !phone) {
       return res.status(400).json({ error: "Customer info is required" });
     }
@@ -45,7 +48,10 @@ router.post("/", async (req, res) => {
   }
 });
 
-// Get Orders 
+/**
+ * @route   GET /api/orders
+ * @desc    Get orders (with optional filters)
+ */
 router.get("/", async (req, res) => {
   try {
     const filter = {};
@@ -60,7 +66,10 @@ router.get("/", async (req, res) => {
   }
 });
 
-// Assign Deliveryman 
+/**
+ * @route   PUT /api/orders/:id/assign
+ * @desc    Assign deliveryman to order
+ */
 router.put("/:id/assign", async (req, res) => {
   try {
     const { deliverymanId } = req.body;
@@ -75,10 +84,7 @@ router.put("/:id/assign", async (req, res) => {
 
     const updatedOrder = await Order.findByIdAndUpdate(
       req.params.id,
-      {
-        assignedTo: deliverymanId,
-        status: "assigned"
-      },
+      { assignedTo: deliverymanId, status: "assigned" },
       { new: true }
     ).populate("assignedTo");
 
@@ -93,7 +99,10 @@ router.put("/:id/assign", async (req, res) => {
   }
 });
 
-// Update Order 
+/**
+ * @route   PUT /api/orders/:id
+ * @desc    Update order fields (status, deliveryman, payment, notes)
+ */
 router.put("/:id", async (req, res) => {
   const { status, assignedTo, assignedToName, paymentStatus, specialNotes } = req.body;
 
@@ -103,6 +112,7 @@ router.put("/:id", async (req, res) => {
 
     const updateFields = {};
 
+    // Assign by deliveryman name (alt method)
     if (assignedToName) {
       const deliveryman = await Deliveryman.findOne({ name: assignedToName });
       if (!deliveryman) return res.status(404).json({ error: "Deliveryman not found" });
@@ -132,7 +142,10 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// Delete Order
+/**
+ * @route   DELETE /api/orders/:id
+ * @desc    Delete order
+ */
 router.delete("/:id", async (req, res) => {
   try {
     const deletedOrder = await Order.findByIdAndDelete(req.params.id);
