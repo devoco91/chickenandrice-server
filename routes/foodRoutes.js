@@ -1,13 +1,14 @@
-const express = require("express");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const Food = require("../models/Food");
+// routes/foodRoute.js
+import express from "express";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import Food from "../models/Food.js";
 
 const router = express.Router();
 
 // Ensure uploads dir exists
-const uploadsDir = path.join(__dirname, "../uploads");
+const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -143,7 +144,7 @@ router.delete("/:id", async (req, res) => {
 
     // Delete file if stored locally
     if (food.image && food.image.startsWith("/uploads/")) {
-      const filePath = path.join(__dirname, `..${food.image}`);
+      const filePath = path.join(process.cwd(), food.image);
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     }
 
@@ -154,4 +155,4 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;

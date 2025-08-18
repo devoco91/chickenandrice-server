@@ -5,6 +5,10 @@ import cors from "cors";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 
+// Import routes
+import foodRoutes from "./routes/foodRoutes.js"; 
+import orderRoutes from "./routes/orders.js";
+
 dotenv.config();
 
 const app = express();
@@ -38,7 +42,9 @@ app.use(
   })
 );
 
+// =====================
 // MongoDB connect
+// =====================
 const MONGO_URI = process.env.MONGO_URI;
 mongoose
   .connect(MONGO_URI)
@@ -47,20 +53,6 @@ mongoose
     console.error("❌ MongoDB connection error:", err.message);
     process.exit(1);
   });
-
-// =====================
-// Models
-// =====================
-const orderSchema = new mongoose.Schema(
-  {
-    item: { type: String, required: true },
-    status: { type: String, default: "pending" },
-    createdAt: { type: Date, default: Date.now },
-  },
-  { collection: "orders" }
-);
-
-const Order = mongoose.model("Order", orderSchema);
 
 // =====================
 // Routes
@@ -82,28 +74,9 @@ app.get("/protected", (req, res) => {
   });
 });
 
-// Orders API
-app.get("/api/orders", async (req, res) => {
-  try {
-    const orders = await Order.find();
-    res.json(orders);
-  } catch (err) {
-    console.error("⚠️ Error fetching orders:", err);
-    res.status(500).json({ error: "Server error while fetching orders" });
-  }
-});
-
-app.post("/api/orders", async (req, res) => {
-  try {
-    const { item, status } = req.body;
-    const newOrder = new Order({ item, status });
-    const saved = await newOrder.save();
-    res.status(201).json(saved);
-  } catch (err) {
-    console.error("⚠️ Error creating order:", err);
-    res.status(400).json({ error: "Invalid order data" });
-  }
-});
+// Use modular routes
+app.use("/api/foods", foodRoutes);
+app.use("/api/orders", orderRoutes);
 
 // =====================
 // Error handler

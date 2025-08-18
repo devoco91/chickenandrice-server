@@ -1,7 +1,8 @@
-const express = require("express");
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const Deliveryman = require("../models/Deliveryman");
+// routes/delivery.js
+import express from "express";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import Deliveryman from "../models/Deliveryman.js";
 
 const router = express.Router();
 
@@ -53,9 +54,9 @@ router.post("/signup", async (req, res) => {
 
     await newDeliveryman.save();
 
-    res.status(201).json({ 
-      message: "Signup successful", 
-      deliveryman: { ...newDeliveryman.toObject(), password: undefined } 
+    res.status(201).json({
+      message: "Signup successful",
+      deliveryman: { ...newDeliveryman.toObject(), password: undefined }
     });
   } catch (error) {
     console.error("❌ Signup error:", error);
@@ -124,7 +125,7 @@ router.patch("/status", auth, async (req, res) => {
   try {
     const { isOnline } = req.body;
     const deliveryman = await Deliveryman.findById(req.deliverymanId);
-    
+
     if (!deliveryman) return res.status(404).json({ message: "Deliveryman not found" });
 
     deliveryman.isOnline = !!isOnline;
@@ -132,10 +133,10 @@ router.patch("/status", auth, async (req, res) => {
 
     console.log(`📦 ${deliveryman.name} → ${isOnline ? "ONLINE" : "OFFLINE"}`);
 
-    res.json({ 
-      message: "Status updated successfully", 
+    res.json({
+      message: "Status updated successfully",
       isOnline: deliveryman.isOnline,
-      deliveryman: { ...deliveryman.toObject(), password: undefined } 
+      deliveryman: { ...deliveryman.toObject(), password: undefined }
     });
   } catch (err) {
     console.error("❌ Status update error:", err);
@@ -166,7 +167,7 @@ router.get("/", async (req, res) => {
   try {
     const onlyOnline = req.query.online === "true" || req.query.isOnline === "true";
     const query = onlyOnline ? { isOnline: true } : {};
-    
+
     const deliverymen = await Deliveryman.find(query).select("-password");
 
     console.log(`📋 Found ${deliverymen.length} deliverymen (query: ${JSON.stringify(query)})`);
@@ -178,4 +179,4 @@ router.get("/", async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;

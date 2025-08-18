@@ -1,4 +1,5 @@
-const mongoose = require("mongoose");
+// models/Deliveryman.js
+import mongoose from "mongoose";
 
 const deliverymanSchema = new mongoose.Schema(
   {
@@ -17,11 +18,13 @@ const deliverymanSchema = new mongoose.Schema(
     // Role (for JWT + RBAC)
     role: { type: String, enum: ["deliveryman"], default: "deliveryman" },
 
-    // Tracking fields (optional, useful later)
+    // Tracking fields
     lastLogin: { type: Date },
     assignedOrders: [{ type: mongoose.Schema.Types.ObjectId, ref: "Order" }],
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Deliveryman", deliverymanSchema);
+const Deliveryman = mongoose.model("Deliveryman", deliverymanSchema);
+
+export default Deliveryman;

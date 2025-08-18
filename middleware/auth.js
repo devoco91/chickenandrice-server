@@ -1,11 +1,12 @@
-const jwt = require("jsonwebtoken");
+// middleware/auth.js
+import jwt from "jsonwebtoken";
 
 /**
  * Authentication middleware
  * - Verifies JWT from "Authorization: Bearer <token>"
  * - Attaches decoded user { id, role } to req.user
  */
-function auth(req, res, next) {
+export function auth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
     return res.status(401).json({ message: "No token provided" });
@@ -32,7 +33,7 @@ function auth(req, res, next) {
  * Role-based authorization middleware
  * - Usage: app.get("/admin", auth, authorizeRoles("admin"), handler)
  */
-function authorizeRoles(...roles) {
+export function authorizeRoles(...roles) {
   return (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({ message: "Forbidden" });
@@ -40,5 +41,3 @@ function authorizeRoles(...roles) {
     next();
   };
 }
-
-module.exports = { auth, authorizeRoles };
