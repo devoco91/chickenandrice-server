@@ -1,158 +1,126 @@
-// routes/foodRoute.js
-import express from "express";
-import multer from "multer";
-import path from "path";
-import fs from "fs";
-import Food from "../models/Food.js";
+import express from "express"
+import multer from "multer"
+import Food from "../models/Food.js"
 
-const router = express.Router();
+const router = express.Router()
 
-// Ensure uploads dir exists
-const uploadsDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Multer config
+// ---- Multer setup ----
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + "-" + file.originalname);
-  },
-});
+  destination: (req, file, cb) => cb(null, "uploads/"),
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+})
+const upload = multer({ storage })
 
-const upload = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
-});
-
-/**
- * @route   POST /api/foods
- * @desc    Create new food
- */
-router.post("/", upload.single("imageFile"), async (req, res) => {
-  try {
-    const { name, price, description, category, isAvailable, isPopular, image: imageUrl } = req.body;
-
-    if (!name || !price) {
-      return res.status(400).json({ error: "Name and price are required" });
-    }
-
-    let image = "";
-    if (req.file) {
-      image = `/uploads/${req.file.filename}`;
-    } else if (imageUrl && imageUrl.trim() !== "") {
-      image = imageUrl.trim();
-    }
-
-    const food = new Food({
-      name: name.trim(),
-      price: parseFloat(price),
-      description: description ? description.trim() : "",
-      category: category || "Main",
-      isAvailable: isAvailable === "true" || isAvailable === true,
-      isPopular: isPopular === "true" || isPopular === true,
-      image,
-    });
-
-    const savedFood = await food.save();
-    res.status(201).json(savedFood);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-/**
- * @route   GET /api/foods
- * @desc    Get all foods
- */
+// ---- Get all foods OR filter by state/lga/category ----
 router.get("/", async (req, res) => {
   try {
-    const foods = await Food.find().sort({ createdAt: -1 });
-    res.json(foods);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+    const { state, lga, category } = req.query
+    let query = {}
 
-/**
- * @route   GET /api/foods/sides-drinks
- * @desc    Get only sides and drinks
- */
+    if (state && lga) {
+      query = { state, lgas: { $in: [lga] } }
+    } else if (state) {
+      query = { state }
+    }
+
+    if (category) {
+      // Allow comma-separated categories
+      query.category = { $in: category.split(",") }
+    }
+
+    const foods = await Food.find(query).sort({ createdAt: -1 })
+    res.json(foods)
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch foods" })
+  }
+})
+
+// ---- Get only Sides & Drinks ----
 router.get("/sides-drinks", async (req, res) => {
   try {
-    const items = await Food.find({
-      category: { $in: ["Side", "Drink"] },
-      isAvailable: true,
-    }).sort({ createdAt: -1 });
+    const foods = await Food.find({
+      category: { $regex: /(side|drink)/i }, // matches "Side", "Sides", "Drink", "Drinks"
+    }).sort({ createdAt: -1 })
 
-    res.json(items);
+    res.json(foods)
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Failed to fetch food" })
   }
-});
+})
 
-/**
- * @route   PUT /api/foods/:id
- * @desc    Update food
- */
-router.put("/:id", upload.single("imageFile"), async (req, res) => {
+// ---- Get a single food by ID ----
+router.get("/:id", async (req, res) => {
   try {
-    const { id } = req.params;
-    const { name, price, description, category, isAvailable, isPopular, image: imageUrl } = req.body;
+    const food = await Food.findById(req.params.id)
+    if (!food) return res.status(404).json({ error: "Food not found" })
+    res.json(food)
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch food" })
+  }
+})
 
-    const existing = await Food.findById(id);
-    if (!existing) return res.status(404).json({ error: "Food not found" });
+// ---- Create food ----
+router.post("/", upload.single("imageFile"), async (req, res) => {
+  try {
+    const { name, description, price, category, isAvailable, isPopular, state, lgas } = req.body
 
-    let image = existing.image;
-    if (req.file) {
-      image = `/uploads/${req.file.filename}`;
-    } else if (imageUrl && imageUrl.trim() !== "") {
-      image = imageUrl.trim();
-    }
-
-    const updatedData = {
-      name: name ? name.trim() : existing.name,
-      price: price ? parseFloat(price) : existing.price,
-      description: description !== undefined ? description.trim() : existing.description,
-      category: category || existing.category,
+    const food = new Food({
+      name,
+      description,
+      price,
+      category,
       isAvailable: isAvailable === "true" || isAvailable === true,
       isPopular: isPopular === "true" || isPopular === true,
-      image,
-    };
+      state,
+      lgas: lgas ? JSON.parse(lgas) : [],
+      image: req.file ? `/uploads/${req.file.filename}` : null,
+    })
 
-    const updatedFood = await Food.findByIdAndUpdate(id, updatedData, { new: true });
-    res.json(updatedFood);
+    await food.save()
+    res.status(201).json(food)
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: err.message })
   }
-});
+})
 
-/**
- * @route   DELETE /api/foods/:id
- * @desc    Delete food
- */
-router.delete("/:id", async (req, res) => {
+// ---- Update food ----
+router.put("/:id", upload.single("imageFile"), async (req, res) => {
   try {
-    const { id } = req.params;
-    const food = await Food.findById(id);
+    const { name, description, price, category, isAvailable, isPopular, state, lgas } = req.body
 
-    if (!food) return res.status(404).json({ error: "Food not found" });
-
-    // Delete file if stored locally
-    if (food.image && food.image.startsWith("/uploads/")) {
-      const filePath = path.join(process.cwd(), food.image);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    const updateData = {
+      name,
+      description,
+      price,
+      category,
+      isAvailable: isAvailable === "true" || isAvailable === true,
+      isPopular: isPopular === "true" || isPopular === true,
+      state,
+      lgas: lgas ? JSON.parse(lgas) : [],
     }
 
-    await Food.findByIdAndDelete(id);
-    res.json({ message: "Food deleted" });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
+    if (req.file) {
+      updateData.image = `/uploads/${req.file.filename}`
+    }
 
-export default router;
+    const food = await Food.findByIdAndUpdate(req.params.id, updateData, { new: true })
+    if (!food) return res.status(404).json({ error: "Food not found" })
+
+    res.json(food)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// ---- Delete food ----
+router.delete("/:id", async (req, res) => {
+  try {
+    const food = await Food.findByIdAndDelete(req.params.id)
+    if (!food) return res.status(404).json({ error: "Food not found" })
+    res.json({ message: "Food deleted successfully" })
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete food" })
+  }
+})
+
+export default router

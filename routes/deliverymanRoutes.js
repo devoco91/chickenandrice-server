@@ -1,8 +1,8 @@
-// routes/delivery.js
 import express from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import Deliveryman from "../models/Deliveryman.js";
+import Order from "../models/Order.js";
 
 const router = express.Router();
 
@@ -54,8 +54,15 @@ router.post("/signup", async (req, res) => {
 
     await newDeliveryman.save();
 
+    const token = jwt.sign(
+      { id: newDeliveryman._id, role: "deliveryman" },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
     res.status(201).json({
       message: "Signup successful",
+      token,
       deliveryman: { ...newDeliveryman.toObject(), password: undefined }
     });
   } catch (error) {
@@ -145,37 +152,33 @@ router.patch("/status", auth, async (req, res) => {
 });
 
 /**
- * @route   GET /api/delivery/dashboard
- * @desc    Get deliveryman dashboard (protected)
+ * @route   GET /api/delivery
+ * @desc    Get all deliverymen with their status (online/offline)
  */
-router.get("/dashboard", auth, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const deliveryman = await Deliveryman.findById(req.deliverymanId).select("-password");
-    if (!deliveryman) return res.status(404).json({ message: "User not found" });
-
-    res.json({ message: "Dashboard access granted", deliveryman });
+    const deliverymen = await Deliveryman.find().select("-password");
+    res.json({ deliverymen });
   } catch (err) {
-    res.status(500).json({ message: "Server error" });
+    console.error("❌ Error fetching deliverymen:", err);
+    res.status(500).json({ message: "Server error fetching deliverymen" });
   }
 });
 
 /**
- * @route   GET /api/delivery
- * @desc    Get all deliverymen (optionally filter by online status)
+ * @route   GET /api/delivery/my-orders
+ * @desc    Get all orders assigned to the logged-in deliveryman
  */
-router.get("/", async (req, res) => {
+router.get("/my-orders", auth, async (req, res) => {
   try {
-    const onlyOnline = req.query.online === "true" || req.query.isOnline === "true";
-    const query = onlyOnline ? { isOnline: true } : {};
+    const orders = await Order.find({ assignedTo: req.deliverymanId })
+      .sort({ createdAt: -1 })
+      .populate("assignedTo", "name email phone isOnline");
 
-    const deliverymen = await Deliveryman.find(query).select("-password");
-
-    console.log(`📋 Found ${deliverymen.length} deliverymen (query: ${JSON.stringify(query)})`);
-
-    res.json(deliverymen);
+    res.json({ orders });
   } catch (err) {
-    console.error("❌ Error fetching deliverymen:", err);
-    res.status(500).json({ message: "Server error fetching deliverymen" });
+    console.error("❌ Error fetching my orders:", err);
+    res.status(500).json({ message: "Server error fetching orders" });
   }
 });
 

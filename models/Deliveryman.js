@@ -1,26 +1,36 @@
-// models/Deliveryman.js
 import mongoose from "mongoose";
 
 const deliverymanSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    phone: { type: String, required: true, unique: true },
-    email: { type: String, required: true, unique: true },
-    password: { type: String, required: true }, // store hashed password only
-    address: { type: String, required: true },
-    dateOfBirth: { type: Date },
-    profilePicture: { type: String },
-
-    // Status fields
-    isActive: { type: Boolean, default: true },   // whether still employed
-    isOnline: { type: Boolean, default: false },  // live availability
-
-    // Role (for JWT + RBAC)
-    role: { type: String, enum: ["deliveryman"], default: "deliveryman" },
-
-    // Tracking fields
-    lastLogin: { type: Date },
-    assignedOrders: [{ type: mongoose.Schema.Types.ObjectId, ref: "Order" }],
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+    },
+    phone: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    password: {
+      type: String,
+      required: true,
+      minlength: 6,
+    },
+    isOnline: {
+      type: Boolean,
+      default: false,
+    },
+    role: {
+      type: String,
+      default: "deliveryman",
+    },
   },
   { timestamps: true }
 );

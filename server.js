@@ -1,13 +1,16 @@
-// server.js
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
+import path from "path";
+import { fileURLToPath } from "url";
 
-// Import routes
+// Routes
 import foodRoutes from "./routes/foodRoutes.js"; 
 import orderRoutes from "./routes/orders.js";
+import deliverymanRoutes from "./routes/deliverymanRoutes.js";
+import checkMealRoutes from "./routes/checkMeal.js";
 
 dotenv.config();
 
@@ -42,9 +45,12 @@ app.use(
   })
 );
 
-// =====================
-// MongoDB connect
-// =====================
+// ===== Serve uploads folder as static =====
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// ===== MongoDB connect =====
 const MONGO_URI = process.env.MONGO_URI;
 mongoose
   .connect(MONGO_URI)
@@ -54,16 +60,12 @@ mongoose
     process.exit(1);
   });
 
-// =====================
-// Routes
-// =====================
-
-// Root test
+// ===== Routes =====
 app.get("/", (req, res) => {
   res.json({ message: "Welcome to Chicken & Rice API 🍚🍗" });
 });
 
-// Protected route example
+// Protected test route
 app.get("/protected", (req, res) => {
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "No token provided" });
@@ -77,24 +79,23 @@ app.get("/protected", (req, res) => {
 // Use modular routes
 app.use("/api/foods", foodRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/delivery", deliverymanRoutes);
+app.use("/api/check-meal", checkMealRoutes);
 
-// =====================
 // Error handler
-// =====================
 app.use((err, req, res, next) => {
   console.error("⚠️ Server error:", err.stack);
   res.status(500).json({ error: "Something went wrong" });
 });
 
-// =====================
 // Start server
-// =====================
-let portSource = "default (3000)";
-if (process.env.PORT) {
-  portSource = process.env.FLY_APP_NAME ? "Fly (injected)" : ".env/local";
-}
 const PORT = process.env.PORT || 3000;
+let portSource = process.env.PORT
+  ? process.env.FLY_APP_NAME
+    ? "Fly (injected)"
+    : ".env/local"
+  : "default (3000)";
 
 app.listen(PORT, "0.0.0.0", () =>
-  console.log(`🚀 Server running on port ${PORT} [${portSource}]`)
+  console.log(`🚀 Server running on http://localhost:${PORT} [${portSource}]`)
 );

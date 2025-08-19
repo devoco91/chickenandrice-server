@@ -38,14 +38,22 @@ const orderSchema = new mongoose.Schema(
     // Order Status
     status: {
       type: String,
-      enum: ["pending", "assigned", "in-transit", "delivered", "cancelled", "completed"],
+      enum: [
+        "pending",
+        "assigned",
+        "in-transit",
+        "delivered",
+        "cancelled",
+        "completed",
+      ],
       default: "pending",
     },
 
     // Delivery assignment
     assignedTo: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Deliveryman",
+      ref: "Deliveryman", // ✅ populate full deliveryman details
+      default: null,
     },
     assignedToName: { type: String }, // quick lookup
 
@@ -63,7 +71,7 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Auto-calculate financials before saving
+// 🔄 Auto-calculate financials before saving
 orderSchema.pre("save", function (next) {
   if (this.items && this.items.length > 0) {
     this.subtotal = this.items.reduce(
