@@ -11,6 +11,7 @@ import foodRoutes from "./routes/foodRoutes.js";
 import orderRoutes from "./routes/orders.js";
 import deliverymanRoutes from "./routes/deliverymanRoutes.js";
 import checkMealRoutes from "./routes/checkMeal.js";
+import adminAuthRoutes from "./routes/auth.js";  // ✅ renamed
 
 dotenv.config();
 
@@ -51,9 +52,8 @@ const __dirname = path.dirname(__filename);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ===== MongoDB connect =====
-const MONGO_URI = process.env.MONGO_URI;
 mongoose
-  .connect(MONGO_URI)
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => {
     console.error("❌ MongoDB connection error:", err.message);
@@ -65,22 +65,29 @@ app.get("/", (req, res) => {
   res.json({ message: "Welcome to Chicken & Rice API 🍚🍗" });
 });
 
-// Protected test route
-app.get("/protected", (req, res) => {
+// ===== Protected test route =====
+app.get("/api/protected", (req, res) => {
+  console.log("🔑 Checking JWT_SECRET:", process.env.JWT_SECRET ? "[LOADED]" : "[MISSING]");
+
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "No token provided" });
 
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-    if (err) return res.status(403).json({ error: "Invalid token" });
+    if (err) {
+      console.error("❌ JWT verification failed:", err.message);
+      return res.status(403).json({ error: "Invalid token" });
+    }
     res.json({ message: "Protected route access granted", user: decoded });
   });
 });
+
 
 // Use modular routes
 app.use("/api/foods", foodRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/delivery", deliverymanRoutes);
 app.use("/api/check-meal", checkMealRoutes);
+app.use("/api/admin", adminAuthRoutes);   // ✅ admin login route here
 
 // Error handler
 app.use((err, req, res, next) => {
