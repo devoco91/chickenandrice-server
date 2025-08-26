@@ -3,6 +3,7 @@ import express from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import Deliveryman from "../models/Deliveryman.js";
+import Order from "../models/Order.js";
 
 const router = express.Router();
 
@@ -22,6 +23,43 @@ function auth(req, res, next) {
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 }
+
+/**
+ * 📌 Helper: pick deliveryman with fewest active orders
+ */
+const pickSmartDeliveryman = async () => {
+  const onlineDeliverymen = await Deliveryman.find({ isOnline: true });
+  if (!onlineDeliverymen || onlineDeliverymen.length === 0) return null;
+
+  const deliverymenWithLoad = await Promise.all(
+    onlineDeliverymen.map(async (dm) => {
+      const activeOrders = await Order.countDocuments({
+        assignedTo: dm._id,
+        status: { $in: ["pending", "assigned", "in-transit"] },
+      });
+      return { deliveryman: dm, activeOrders };
+    })
+  );
+
+  deliverymenWithLoad.sort((a, b) => a.activeOrders - b.activeOrders);
+  return deliverymenWithLoad[0].deliveryman;
+};
+
+/**
+ * 📌 Auto-assign pending orders to available deliverymen
+ */
+const autoAssignPendingOrders = async () => {
+  const pendingOrders = await Order.find({ status: "pending" }).sort({ createdAt: 1 });
+
+  for (const order of pendingOrders) {
+    const deliveryman = await pickSmartDeliveryman();
+    if (!deliveryman) break;
+
+    order.assignedTo = deliveryman._id; // ✅ only reference, no duplicate name
+    order.status = "assigned";
+    await order.save();
+  }
+};
 
 /**
  * @route   POST /api/delivery/signup
@@ -96,10 +134,63 @@ router.post("/login", async (req, res) => {
       `🟢 ${updatedDeliveryman.name} logged in → ONLINE (role: ${updatedDeliveryman.role})`
     );
 
+    // 🔄 Auto-assign any pending orders now that a deliveryman is online
+    await autoAssignPendingOrders();
+
     res.json({ token, user: updatedDeliveryman.toObject() });
   } catch (err) {
     console.error("❌ Login error:", err);
     res.status(500).json({ message: "Server error during login" });
+  }
+});
+
+/**
+ * @route   POST /api/delivery/logout
+ */
+router.post("/logout", auth, async (req, res) => {
+  try {
+    const deliveryman = await Deliveryman.findByIdAndUpdate(
+      req.user.id,
+      { isOnline: false },
+      { new: true }
+    ).select("-password");
+
+    if (!deliveryman) return res.status(404).json({ message: "Not found" });
+
+    console.log(`🔴 ${deliveryman.name} logged out → OFFLINE`);
+    res.json({ message: "Logged out successfully", user: deliveryman });
+  } catch (err) {
+    console.error("❌ Logout error:", err);
+    res.status(500).json({ message: "Server error during logout" });
+  }
+});
+
+/**
+ * @route   PUT /api/delivery/status
+ * @desc    Toggle deliveryman online/offline manually
+ */
+router.put("/status", auth, async (req, res) => {
+  try {
+    const { isOnline } = req.body;
+    const deliveryman = await Deliveryman.findByIdAndUpdate(
+      req.user.id,
+      { isOnline },
+      { new: true }
+    ).select("-password");
+
+    if (!deliveryman) return res.status(404).json({ message: "Not found" });
+
+    console.log(`⚡ ${deliveryman.name} is now ${isOnline ? "ONLINE" : "OFFLINE"}`);
+
+    if (isOnline) {
+      // 🔄 Auto-assign pending orders when going online
+      await autoAssignPendingOrders();
+    }
+
+    res.json({ user: deliveryman });
+  } catch (err) {
+    console.error("❌ Status toggle error:", err);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -119,5 +210,23 @@ router.get("/", auth, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
+
+
+/**
+ * @route   GET /api/delivery/profile
+ * @desc    Get logged-in deliveryman's profile
+ */
+router.get("/profile", auth, async (req, res) => {
+  try {
+    const deliveryman = await Deliveryman.findById(req.user.id).select("-password");
+    if (!deliveryman) return res.status(404).json({ message: "Deliveryman not found" });
+    res.json(deliveryman);
+  } catch (err) {
+    console.error("❌ Profile fetch error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 
 export default router;

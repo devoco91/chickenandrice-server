@@ -23,12 +23,20 @@ const deliverymanSchema = new mongoose.Schema(
       required: true,
       minlength: 6,
     },
+    address: {
+      type: String,
+      required: true, // ✅ added to match signup route
+    },
+    dateOfBirth: {
+      type: Date, // ✅ optional field
+    },
     isOnline: {
       type: Boolean,
       default: false,
     },
     role: {
       type: String,
+      enum: ["deliveryman", "admin"], // ✅ added enum for safety
       default: "deliveryman",
     },
   },

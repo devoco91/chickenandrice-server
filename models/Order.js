@@ -10,18 +10,17 @@ const orderSchema = new mongoose.Schema(
       },
     ],
 
-    // Customer Info
     customerName: { type: String, required: true },
     phone: { type: String, required: true },
     houseNumber: { type: String, required: true },
     street: { type: String, required: true },
     landmark: { type: String },
 
-    // Financials (auto-calculated)
     subtotal: { type: Number, default: 0 },
     tax: { type: Number, default: 0 },
     deliveryFee: { type: Number, default: 0 },
     total: { type: Number, default: 0 },
+
     paymentMode: {
       type: String,
       enum: ["cash", "card", "upi"],
@@ -35,43 +34,44 @@ const orderSchema = new mongoose.Schema(
 
     specialNotes: { type: String },
 
-    // Order Status
     status: {
       type: String,
-      enum: [
-        "pending",
-        "assigned",
-        "in-transit",
-        "delivered",
-        "cancelled",
-        "completed",
-      ],
+      enum: ["pending", "assigned", "in-transit", "delivered", "cancelled", "completed"],
       default: "pending",
     },
 
-    // Delivery assignment
     assignedTo: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Deliveryman", // ✅ populate full deliveryman details
+      ref: "Deliveryman",
       default: null,
     },
-    assignedToName: { type: String }, // quick lookup
 
-    // Dates
     orderDate: { type: Date, default: Date.now },
     deliveryDate: { type: Date },
     deliveryTime: { type: Date },
 
-    // Geo location
+    // ✅ GeoJSON Point (required)
     location: {
-      lat: { type: Number },
-      lng: { type: Number },
+      type: {
+        type: String,
+        enum: ["Point"],
+        required: true,
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number], // [lng, lat]
+        required: true,
+        default: [3.3792, 6.5244], // ✅ Lagos fallback
+      },
     },
   },
   { timestamps: true }
 );
 
-// 🔄 Auto-calculate financials before saving
+// ✅ Geospatial index for queries like nearest deliveryman
+orderSchema.index({ location: "2dsphere" });
+
+// ✅ Auto-calc totals before save
 orderSchema.pre("save", function (next) {
   if (this.items && this.items.length > 0) {
     this.subtotal = this.items.reduce(
@@ -79,14 +79,11 @@ orderSchema.pre("save", function (next) {
       0
     );
   }
-
   this.tax = this.tax || 0;
   this.deliveryFee = this.deliveryFee || 0;
   this.total = this.subtotal + this.tax + this.deliveryFee;
-
   next();
 });
 
-const Order = mongoose.model("Order", orderSchema);
-
+const Order = mongoose.models.Order || mongoose.model("Order", orderSchema);
 export default Order;
