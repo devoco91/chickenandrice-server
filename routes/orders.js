@@ -1,148 +1,271 @@
-const express = require("express");
+// ================================
+// backend/routes/orders.js
+// ================================
+import express from "express";
+import Order from "../models/Order.js";
+import Deliveryman from "../models/Deliveryman.js";
+import { geocodeAddress } from "../utils/geocode.js";
+
 const router = express.Router();
-const Order = require("../models/Order");
-const Deliveryman = require("../models/Deliveryman");
 
-router.use((req, res, next) => {
-  console.log(`📥 ${req.method} ${req.originalUrl}`);
-  next();
-});
+// ================================
+// 📌 Pick online deliveryman with least active orders
+// ================================
+const pickSmartDeliveryman = async (excludeId = null) => {
+  const query = { isOnline: true };
+  if (excludeId) query._id = { $ne: excludeId };
 
-// Create Order
+  const online = await Deliveryman.find(query);
+  if (!online?.length) return null;
+
+  const loads = await Promise.all(
+    online.map(async (dm) => {
+      const active = await Order.countDocuments({
+        assignedTo: dm._id,
+        status: { $in: ["pending", "assigned", "accepted", "in-transit"] },
+      });
+      return { deliveryman: dm, activeOrders: active };
+    })
+  );
+
+  loads.sort((a, b) => a.activeOrders - b.activeOrders);
+  return loads[0].deliveryman;
+};
+
+// ================================
+// 📌 Normalize location into GeoJSON
+// ================================
+async function normalizeGeoLocation(raw, street = "", houseNumber = "") {
+  const fallback = { type: "Point", coordinates: [3.3792, 6.5244] };
+
+  if (!raw && !street) return fallback;
+
+  // Already a Point
+  if (raw?.type === "Point" && Array.isArray(raw.coordinates)) {
+    let [lng, lat] = raw.coordinates.map(Number);
+    const looksReversed = Math.abs(lng) <= 90 && Math.abs(lat) > 90;
+    if (looksReversed) [lng, lat] = [lat, lng];
+    return { type: "Point", coordinates: [lng, lat] };
+  }
+
+  // Raw lat/lng
+  if (raw?.lat != null && raw?.lng != null) {
+    return { type: "Point", coordinates: [Number(raw.lng), Number(raw.lat)] };
+  }
+
+  // Clean "Auto detected" prefix before geocoding
+  if (street) {
+    const cleanedStreet = street.replace(/^Auto\s*detected,?/i, "").trim();
+    const address = `${houseNumber || ""} ${cleanedStreet}`.trim();
+    const coords = await geocodeAddress(address);
+    if (coords) {
+      return { type: "Point", coordinates: [coords.lng, coords.lat] };
+    }
+  }
+
+  return fallback;
+}
+
+// ================================
+// 📌 Create Order
+// ================================
 router.post("/", async (req, res) => {
   try {
-    const {
-      items, customerName, houseNumber, street, landmark,
-      phone, total, specialNotes
-    } = req.body;
+    const body = req.body || {};
+    const orderType = body.orderType || "online";
 
-    if (!items || items.length === 0) {
-      return res.status(400).json({ error: "Order must contain items" });
-    }
+    const items = Array.isArray(body.items)
+      ? body.items.map((it) => ({
+          name: it.name,
+          quantity: Number(it.quantity),
+          price: Number(it.price),
+        }))
+      : [];
 
-    if (!customerName || !houseNumber || !street || !phone) {
-      return res.status(400).json({ error: "Customer info is required" });
-    }
+    const subtotal = Number(
+      body.subtotal ??
+        items.reduce((s, it) => s + (Number(it.price) * Number(it.quantity) || 0), 0)
+    );
+    const tax = Number(body.tax ?? 0);
+    const deliveryFee = Number(body.deliveryFee ?? 0);
+    const total = Number(body.total ?? subtotal + tax + deliveryFee);
 
-    const newOrder = new Order({
+    const rawPM = String(body.paymentMode || "").toLowerCase();
+    let paymentMode = undefined;
+    if (["cash", "card", "upi"].includes(rawPM)) paymentMode = rawPM;
+    else if (rawPM === "transfer") paymentMode = "upi";
+
+    let orderData = {
       items,
-      customerName,
-      houseNumber,
-      street,
-      landmark,
-      phone,
+      subtotal,
+      tax,
+      deliveryFee,
       total,
-      specialNotes,
-      orderDate: new Date(),
-      status: "pending",
-    });
+      specialNotes: body.specialNotes ?? "",
+      orderType,
+      paymentMode,
+    };
 
-    const savedOrder = await newOrder.save();
-    res.status(201).json(savedOrder);
+    if (orderType === "online") {
+      const normalizedLoc = await normalizeGeoLocation(
+        body.location,
+        body.street,
+        body.houseNumber
+      );
+      orderData = {
+        ...orderData,
+        customerName: body.customerName,
+        phone: body.phone,
+        houseNumber: body.houseNumber,
+        // ✅ Strip "Auto detected" before saving street
+        street: body.street?.replace(/^Auto\s*detected,?/i, "").trim(),
+        landmark: body.landmark,
+        location: normalizedLoc,
+      };
+    } else {
+      orderData = {
+        ...orderData,
+        customerName: body.customerName || "Walk-in Customer",
+        phone: body.phone || "",
+        houseNumber: "",
+        street: "",
+        landmark: "",
+        location: { type: "Point", coordinates: [3.3792, 6.5244] },
+      };
+    }
+
+    const order = new Order(orderData);
+
+    if (orderType === "online") {
+      const deliveryman = await pickSmartDeliveryman();
+      if (deliveryman) {
+        order.assignedTo = deliveryman._id;
+        order.status = "assigned";
+      } else {
+        order.status = "pending";
+      }
+    }
+
+    await order.save();
+    await order.populate("assignedTo", "name email phone isOnline");
+    res.status(201).json(order);
   } catch (err) {
-    console.error("❌ Error saving order:", err);
-    res.status(500).json({ error: "Server error creating order" });
+    res.status(400).json({ error: err.message, received: req.body });
   }
 });
 
-// Get Orders 
+// ================================
+// 📌 Get Orders (all / filter by type)
+// ================================
 router.get("/", async (req, res) => {
   try {
-    const filter = {};
-    if (req.query.assignedTo) filter.assignedTo = req.query.assignedTo;
-    if (req.query.status) filter.status = req.query.status;
+    const { type } = req.query;
+    let filter = {};
+    if (type) filter.orderType = type;
 
-    const orders = await Order.find(filter).populate("assignedTo");
+    const orders = await Order.find(filter).populate("assignedTo", "name email phone isOnline");
     res.json(orders);
   } catch (err) {
-    console.error("❌ Error fetching orders:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Assign Deliveryman 
-router.put("/:id/assign", async (req, res) => {
+// 📌 Get Online Orders
+router.get("/online", async (req, res) => {
   try {
-    const { deliverymanId } = req.body;
-    if (!deliverymanId) {
-      return res.status(400).json({ error: "Deliveryman ID is required" });
-    }
-
-    const deliveryman = await Deliveryman.findById(deliverymanId);
-    if (!deliveryman) {
-      return res.status(404).json({ error: "Deliveryman not found" });
-    }
-
-    const updatedOrder = await Order.findByIdAndUpdate(
-      req.params.id,
-      {
-        assignedTo: deliverymanId,
-        status: "assigned"
-      },
-      { new: true }
-    ).populate("assignedTo");
-
-    if (!updatedOrder) {
-      return res.status(404).json({ error: "Order not found" });
-    }
-
-    res.json(updatedOrder);
+    const orders = await Order.find({ orderType: "online" }).populate(
+      "assignedTo",
+      "name email phone isOnline"
+    );
+    res.json(orders);
   } catch (err) {
-    console.error("❌ Error assigning deliveryman:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Update Order 
-router.put("/:id", async (req, res) => {
-  const { status, assignedTo, assignedToName, paymentStatus, specialNotes } = req.body;
-
+// 📌 Get In-store Orders
+router.get("/instore", async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const orders = await Order.find({ orderType: "instore" });
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 📌 Get Assigned Orders
+router.get("/assigned", async (req, res) => {
+  try {
+    const orders = await Order.find({
+      status: "assigned",
+      orderType: { $in: ["online", null] },
+    }).populate("assignedTo", "name email phone isOnline");
+
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ================================
+// 📌 Update Order Status
+// ================================
+router.patch("/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!["accepted", "in-transit", "delivered", "cancelled"].includes(status)) {
+      return res.status(400).json({ error: "Invalid status update" });
+    }
+
+    const order = await Order.findByIdAndUpdate(id, { status }, { new: true }).populate(
+      "assignedTo",
+      "name email phone isOnline"
+    );
+
     if (!order) return res.status(404).json({ error: "Order not found" });
-
-    const updateFields = {};
-
-    if (assignedToName) {
-      const deliveryman = await Deliveryman.findOne({ name: assignedToName });
-      if (!deliveryman) return res.status(404).json({ error: "Deliveryman not found" });
-      updateFields.assignedTo = deliveryman._id;
-      updateFields.status = "assigned";
-    }
-
-    if (status) updateFields.status = status;
-    if (assignedTo !== undefined) updateFields.assignedTo = assignedTo;
-    if (paymentStatus !== undefined) updateFields.paymentStatus = paymentStatus;
-    if (specialNotes !== undefined) updateFields.specialNotes = specialNotes;
-
-    if (!updateFields.status) {
-      return res.status(400).json({ error: "Status is required" });
-    }
-
-    const updatedOrder = await Order.findByIdAndUpdate(
-      req.params.id,
-      updateFields,
-      { new: true }
-    ).populate("assignedTo");
-
-    res.json(updatedOrder);
+    res.json(order);
   } catch (err) {
-    console.error("❌ Error updating order:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Delete Order
+// ================================
+// 📌 Get Orders by Status
+// ================================
+router.get("/status/:status", async (req, res) => {
+  try {
+    const { status } = req.params;
+    if (
+      !["pending", "assigned", "accepted", "in-transit", "delivered", "cancelled"].includes(
+        status
+      )
+    ) {
+      return res.status(400).json({ error: "Invalid status filter" });
+    }
+
+    const orders = await Order.find({ status, orderType: "online" }).populate(
+      "assignedTo",
+      "name email phone isOnline"
+    );
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ================================
+// 📌 Delete Order (Admin)
+// ================================
 router.delete("/:id", async (req, res) => {
   try {
-    const deletedOrder = await Order.findByIdAndDelete(req.params.id);
-    if (!deletedOrder) return res.status(404).json({ error: "Order not found" });
-
-    res.json({ message: "Order deleted successfully", order: deletedOrder });
+    const { id } = req.params;
+    await Order.findByIdAndDelete(id);
+    res.json({ ok: true });
   } catch (err) {
-    console.error("❌ Error deleting order:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({ error: err.message });
   }
 });
 
-module.exports = router;
+export default router;

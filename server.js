@@ -1,58 +1,153 @@
-const express = require("express");
-const mongoose = require("mongoose");
-const cors = require("cors");
-const path = require("path");
-require("dotenv").config();
+// server.js
+import express from "express";
+import mongoose from "mongoose";
+import cors from "cors";
+import dotenv from "dotenv";
+import jwt from "jsonwebtoken";
+import path from "path";
+import { fileURLToPath } from "url";
+import nodemailer from "nodemailer"; // ✅ added
+
+// Routes
+import foodRoutes from "./routes/foodRoutes.js";
+import orderRoutes from "./routes/orders.js";
+import deliverymanRoutes from "./routes/deliverymanRoutes.js";
+import checkMealRoutes from "./routes/checkMeal.js";
+import adminAuthRoutes from "./routes/auth.js";
+import foodPopRoutes from "./routes/foodPopRoutes.js";
+import drinkPopRoutes from "./routes/drinkPopRoutes.js";
+import proteinPopRoutes from "./routes/proteinPopRoutes.js";
+import emailRoutes from "./routes/emailRoutes.js";
+import drinkRoutes from "./routes/drinkRoutes.js";
+
+dotenv.config();
 
 const app = express();
 
-app.use(cors());
+// ===== Middleware =====
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
+// ===== CORS setup =====
+const allowedOrigins = [
+  "https://chickenandrice.net",
+  "https://www.chickenandrice.net",
+  /\.chickenandrice\.net$/,
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "https://chickenandrice.vercel.app"
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // allow server-to-server or curl
+      if (
+        allowedOrigins.includes(origin) ||
+        allowedOrigins.some((o) => o instanceof RegExp && o.test(origin))
+      ) {
+        return callback(null, true);
+      }
+      console.error("❌ Blocked by CORS:", origin);
+      return callback(new Error("Not allowed by CORS: " + origin));
+    },
+    credentials: true,
+  })
+);
+
+// ===== Static uploads =====
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Routes 
-const foodRoutes = require("./routes/foodRoutes");
-const orderRoutes = require("./routes/orders");
-const deliverymanRoutes = require("./routes/deliverymanRoutes");
+// ===== MongoDB connect =====
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch((err) => {
+    console.error("❌ MongoDB connection error:", err.message);
+    process.exit(1);
+  });
 
+// ===== Routes =====
+app.get("/", (req, res) => {
+  res.json({ message: "Welcome to Chicken & Rice API 🍚🍗" });
+});
+
+// Protected test route
+app.get("/api/protected", (req, res) => {
+  console.log(
+    "🔑 Checking JWT_SECRET:",
+    process.env.JWT_SECRET ? "[LOADED]" : "[MISSING]"
+  );
+
+  const token = req.headers["authorization"]?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "No token provided" });
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      console.error("❌ JWT verification failed:", err.message);
+      return res.status(403).json({ error: "Invalid token" });
+    }
+    res.json({ message: "Protected route access granted", user: decoded });
+  });
+});
+
+// Modular routes
 app.use("/api/foods", foodRoutes);
 app.use("/api/orders", orderRoutes);
-app.use("/api/deliverymen", deliverymanRoutes);  
+app.use("/api/delivery", deliverymanRoutes);
+app.use("/api/check-meal", checkMealRoutes);
+app.use("/api/admin", adminAuthRoutes);
+app.use("/api/foodpop", foodPopRoutes);
+app.use("/api/drinkpop", drinkPopRoutes);
+app.use("/api/proteinpop", proteinPopRoutes);
+app.use("/api/email", emailRoutes);
+app.use("/api/drinks", drinkRoutes);
 
-app.get("/test-image", (req, res) => {
-  res.send(`
-    <h1>Image Test</h1>
-    <img src="/uploads/sample.jpg" alt="Test Image" style="width:200px;" />
-  `);
-});
-
-const Order = require("./models/Order");
-app.get("/orders-test", async (req, res) => {
-  console.log("🧪 GET /orders-test hit");
+// ===== Email Utility =====
+export const sendEmail = async ({ subject, html }) => {
   try {
-    const orders = await Order.find().populate("items.foodId");
-    console.log("Orders found:", orders.length);
-    res.json(orders);
-  } catch (error) {
-    console.error("❌ Error fetching orders:", error.message);
-    res.status(500).json({ error: error.message });
+    const transporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false,
+      requireTLS: true,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS, // App password
+      },
+    });
+
+    const mailOptions = {
+      from: `"Chicken & Rice" <${process.env.EMAIL_USER}>`,
+      to: "chickenandriceltd@gmail.com", // ✅ fixed recipient
+      subject,
+      html,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log("✅ Email sent successfully");
+  } catch (err) {
+    console.error("❌ Email sending failed:", err.message);
+    throw err;
   }
+};
+
+// ===== Error handler =====
+app.use((err, req, res, next) => {
+  console.error("⚠️ Server error:", err.message);
+  res.status(500).json({ error: "Something went wrong" });
 });
 
-app.get("/", (req, res) => {
-  res.send("🍔 Fast Food API is live!");
-});
+// ===== Start server =====
+const PORT = process.env.PORT || 3000;
+let portSource = process.env.PORT
+  ? process.env.FLY_APP_NAME
+    ? "Fly (injected)"
+    : ".env/local"
+  : "default (3000)";
 
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-  .then(() => {
-    console.log("✅ MongoDB connected");
-    const PORT = process.env.PORT || 5000;
-    app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
-  })
-  .catch((err) => {
-    console.error("❌ MongoDB connection failed:", err.message);
-  });
+app.listen(PORT, "0.0.0.0", () =>
+  console.log(`🚀 Server running on http://localhost:${PORT} [${portSource}]`)
+);
