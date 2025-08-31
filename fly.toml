@@ -5,7 +5,7 @@ primary_region = 'jnb'
 [build]
 
 [http_service]
-  internal_port = 5000   # 👈 match your server's PORT
+  internal_port = 5000   # stays the same
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
@@ -19,3 +19,8 @@ primary_region = 'jnb'
 
 [processes]
   app = "npm start"
+
+# ✅ NEW: persist /data (your server serves /uploads from /data/uploads)
+[[mounts]]
+  source = "uploads"
+  destination = "/data"

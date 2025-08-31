@@ -1,12 +1,13 @@
 // server.js
 import express from "express";
+import fs from "fs";
 import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import path from "path";
 import { fileURLToPath } from "url";
-import nodemailer from "nodemailer"; // ✅ added
+import nodemailer from "nodemailer";
 
 // Routes
 import foodRoutes from "./routes/foodRoutes.js";
@@ -19,6 +20,9 @@ import drinkPopRoutes from "./routes/drinkPopRoutes.js";
 import proteinPopRoutes from "./routes/proteinPopRoutes.js";
 import emailRoutes from "./routes/emailRoutes.js";
 import drinkRoutes from "./routes/drinkRoutes.js";
+
+// ✅ NEW: upload routes
+import uploadRoutes from "./routes/uploadRoutes.js";
 
 dotenv.config();
 
@@ -35,13 +39,13 @@ const allowedOrigins = [
   /\.chickenandrice\.net$/,
   "http://localhost:3000",
   "http://127.0.0.1:3000",
-  "https://chickenandrice.vercel.app"
+  "https://chickenandrice.vercel.app",
 ];
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin) return callback(null, true); // allow server-to-server or curl
+      if (!origin) return callback(null, true);
       if (
         allowedOrigins.includes(origin) ||
         allowedOrigins.some((o) => o instanceof RegExp && o.test(origin))
@@ -55,9 +59,29 @@ app.use(
   })
 );
 
-// ===== Static uploads =====
+// ===== Static uploads (persistent first, then legacy fallback) =====
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Persistent dir (Fly volume / env), fallback to /data/uploads
+const UPLOAD_DIR = process.env.UPLOAD_DIR || "/data/uploads";
+try {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+} catch (e) {
+  console.warn("⚠️ Could not ensure UPLOAD_DIR exists:", e?.message);
+}
+
+// 1) Serve from persistent directory
+app.use(
+  "/uploads",
+  express.static(UPLOAD_DIR, {
+    etag: true,
+    maxAge: "365d",
+    immutable: true,
+  })
+);
+
+// 2) Fallback to project ./uploads for old/local files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ===== MongoDB connect =====
@@ -74,7 +98,6 @@ app.get("/", (req, res) => {
   res.json({ message: "Welcome to Chicken & Rice API 🍚🍗" });
 });
 
-// Protected test route
 app.get("/api/protected", (req, res) => {
   console.log(
     "🔑 Checking JWT_SECRET:",
@@ -105,6 +128,19 @@ app.use("/api/proteinpop", proteinPopRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/drinks", drinkRoutes);
 
+// ✅ NEW: upload routes (saves into UPLOAD_DIR and returns public URL)
+app.use("/api", uploadRoutes);
+
+// ✅ Tiny debug endpoint to list files (optional; remove later)
+app.get("/__uploads", (req, res) => {
+  try {
+    const files = fs.readdirSync(UPLOAD_DIR);
+    res.json({ dir: UPLOAD_DIR, count: files.length, files });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || "list failed" });
+  }
+});
+
 // ===== Email Utility =====
 export const sendEmail = async ({ subject, html }) => {
   try {
@@ -121,7 +157,7 @@ export const sendEmail = async ({ subject, html }) => {
 
     const mailOptions = {
       from: `"Chicken & Rice" <${process.env.EMAIL_USER}>`,
-      to: "chickenandriceltd@gmail.com", // ✅ fixed recipient
+      to: "chickenandriceltd@gmail.com",
       subject,
       html,
     };
