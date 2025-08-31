@@ -1,21 +1,9 @@
 // routes/drinkRoutes.js
 import express from "express";
-import multer from "multer";
-import path from "path";
 import Drink from "../models/Drink.js";
+import { upload } from "../middleware/upload.js"; // ✅ uses UPLOAD_DIR (/data/uploads in prod)
 
 const router = express.Router();
-
-// ==== Multer setup for image upload ====
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
-  },
-});
-const upload = multer({ storage });
 
 // ==== Create drink ====
 router.post("/", upload.single("imageFile"), async (req, res) => {
@@ -24,7 +12,7 @@ router.post("/", upload.single("imageFile"), async (req, res) => {
     const drink = new Drink({
       name,
       price,
-      image: req.file ? `/uploads/${req.file.filename}` : undefined,
+      image: req.file ? `/uploads/${req.file.filename}` : undefined, // saved on volume
     });
     await drink.save();
     res.status(201).json(drink);
@@ -34,7 +22,7 @@ router.post("/", upload.single("imageFile"), async (req, res) => {
 });
 
 // ==== Get all drinks ====
-router.get("/", async (req, res) => {
+router.get("/", async (_req, res) => {
   try {
     const drinks = await Drink.find().sort({ createdAt: -1 });
     res.json(drinks);
@@ -60,7 +48,7 @@ router.put("/:id", upload.single("imageFile"), async (req, res) => {
     const { name, price } = req.body;
     const updates = { name, price };
     if (req.file) {
-      updates.image = `/uploads/${req.file.filename}`;
+      updates.image = `/uploads/${req.file.filename}`; // saved on volume
     }
 
     const drink = await Drink.findByIdAndUpdate(req.params.id, updates, {

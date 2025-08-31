@@ -1,75 +1,77 @@
 // routes/foodRoutes.js
-import express from "express"
-import multer from "multer"
-import Food from "../models/Food.js"
+import express from "express";
+import Food from "../models/Food.js";
+import { upload } from "../middleware/upload.js"; // ✅ use shared storage (points to UPLOAD_DIR)
 
-const router = express.Router()
-
-// ---- Multer setup ----
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "uploads/"),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
-})
-const upload = multer({ storage })
+const router = express.Router();
 
 // ---- Get all foods OR filter by state/lga/category ----
 router.get("/", async (req, res) => {
   try {
-    const { state, lga, category } = req.query
-    let query = {}
+    const { state, lga, category } = req.query;
+    let query = {};
 
     if (state && lga) {
-      query = { state, lgas: { $in: [lga] } }
+      query = { state, lgas: { $in: [lga] } };
     } else if (state) {
-      query = { state }
+      query = { state };
     }
 
     if (category) {
-      query.category = { $in: category.split(",") }
+      query.category = { $in: category.split(",") };
     }
 
-    const foods = await Food.find(query).sort({ createdAt: -1 })
-    res.json(foods)
+    const foods = await Food.find(query).sort({ createdAt: -1 });
+    res.json(foods);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch foods" })
+    res.status(500).json({ error: "Failed to fetch foods" });
   }
-})
+});
 
 // ---- Get only popular foods ----
-router.get("/popular", async (req, res) => {
+router.get("/popular", async (_req, res) => {
   try {
-    const foods = await Food.find({ isPopular: true }).sort({ createdAt: -1 })
-    res.json(foods)
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch popular foods" })
+    const foods = await Food.find({ isPopular: true }).sort({ createdAt: -1 });
+    res.json(foods);
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to fetch popular foods" });
   }
-})
+});
 
 // ---- Get all foods (shortcut) ----
-router.get("/all", async (req, res) => {
+router.get("/all", async (_req, res) => {
   try {
-    const foods = await Food.find().sort({ createdAt: -1 })
-    res.json(foods)
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch all foods" })
+    const foods = await Food.find().sort({ createdAt: -1 });
+    res.json(foods);
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to fetch all foods" });
   }
-})
+});
 
 // ---- Get a single food by ID ----
 router.get("/:id", async (req, res) => {
   try {
-    const food = await Food.findById(req.params.id)
-    if (!food) return res.status(404).json({ error: "Food not found" })
-    res.json(food)
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch food" })
+    const food = await Food.findById(req.params.id);
+    if (!food) return res.status(404).json({ error: "Food not found" });
+    res.json(food);
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to fetch food" });
   }
-})
+});
 
 // ---- Create food ----
 router.post("/", upload.single("imageFile"), async (req, res) => {
   try {
-    const { name, description, price, category, isAvailable, isPopular, state, lgas } = req.body
+    const {
+      name,
+      description,
+      price,
+      category,
+      isAvailable,
+      isPopular,
+      state,
+      lgas,
+    } = req.body;
 
     const food = new Food({
       name,
@@ -80,20 +82,29 @@ router.post("/", upload.single("imageFile"), async (req, res) => {
       isPopular: isPopular === "true" || isPopular === true,
       state,
       lgas: lgas ? JSON.parse(lgas) : [],
-      image: req.file ? `/uploads/${req.file.filename}` : null,
-    })
+      image: req.file ? `/uploads/${req.file.filename}` : null, // ✅ saved on volume via middleware
+    });
 
-    await food.save()
-    res.status(201).json(food)
+    await food.save();
+    res.status(201).json(food);
   } catch (err) {
-    res.status(400).json({ error: err.message })
+    res.status(400).json({ error: err.message });
   }
-})
+});
 
 // ---- Update food ----
 router.put("/:id", upload.single("imageFile"), async (req, res) => {
   try {
-    const { name, description, price, category, isAvailable, isPopular, state, lgas } = req.body
+    const {
+      name,
+      description,
+      price,
+      category,
+      isAvailable,
+      isPopular,
+      state,
+      lgas,
+    } = req.body;
 
     const updateData = {
       name,
@@ -104,30 +115,32 @@ router.put("/:id", upload.single("imageFile"), async (req, res) => {
       isPopular: isPopular === "true" || isPopular === true,
       state,
       lgas: lgas ? JSON.parse(lgas) : [],
-    }
+    };
 
     if (req.file) {
-      updateData.image = `/uploads/${req.file.filename}`
+      updateData.image = `/uploads/${req.file.filename}`; // ✅ saved on volume via middleware
     }
 
-    const food = await Food.findByIdAndUpdate(req.params.id, updateData, { new: true })
-    if (!food) return res.status(404).json({ error: "Food not found" })
+    const food = await Food.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+    });
+    if (!food) return res.status(404).json({ error: "Food not found" });
 
-    res.json(food)
+    res.json(food);
   } catch (err) {
-    res.status(400).json({ error: err.message })
+    res.status(400).json({ error: err.message });
   }
-})
+});
 
 // ---- Delete food ----
 router.delete("/:id", async (req, res) => {
   try {
-    const food = await Food.findByIdAndDelete(req.params.id)
-    if (!food) return res.status(404).json({ error: "Food not found" })
-    res.json({ message: "Food deleted successfully" })
-  } catch (err) {
-    res.status(500).json({ error: "Failed to delete food" })
+    const food = await Food.findByIdAndDelete(req.params.id);
+    if (!food) return res.status(404).json({ error: "Food not found" });
+    res.json({ message: "Food deleted successfully" });
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to delete food" });
   }
-})
+});
 
-export default router
+export default router;

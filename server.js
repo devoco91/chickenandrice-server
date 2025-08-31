@@ -1,11 +1,11 @@
 // server.js
 import express from "express";
-import fs from "fs";
 import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import path from "path";
+import fs from "fs"; // ⬅️ added
 import { fileURLToPath } from "url";
 import nodemailer from "nodemailer";
 
@@ -20,9 +20,6 @@ import drinkPopRoutes from "./routes/drinkPopRoutes.js";
 import proteinPopRoutes from "./routes/proteinPopRoutes.js";
 import emailRoutes from "./routes/emailRoutes.js";
 import drinkRoutes from "./routes/drinkRoutes.js";
-
-// ✅ NEW: upload routes
-import uploadRoutes from "./routes/uploadRoutes.js";
 
 dotenv.config();
 
@@ -41,7 +38,6 @@ const allowedOrigins = [
   "http://127.0.0.1:3000",
   "https://chickenandrice.vercel.app",
 ];
-
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -59,19 +55,17 @@ app.use(
   })
 );
 
-// ===== Static uploads (persistent first, then legacy fallback) =====
+// ===== Static uploads (volume first, then local fallback) =====
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Persistent dir (Fly volume / env), fallback to /data/uploads
+// Use volume in prod, or local folder in dev if provided
 const UPLOAD_DIR = process.env.UPLOAD_DIR || "/data/uploads";
 try {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-} catch (e) {
-  console.warn("⚠️ Could not ensure UPLOAD_DIR exists:", e?.message);
-}
+} catch {}
 
-// 1) Serve from persistent directory
+// Serve from the configured uploads dir (Fly volume in prod)
 app.use(
   "/uploads",
   express.static(UPLOAD_DIR, {
@@ -81,8 +75,21 @@ app.use(
   })
 );
 
-// 2) Fallback to project ./uploads for old/local files
+// Fallback: also serve from project ./uploads (in case of legacy files)
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// (Optional debug): list files
+app.get("/__uploads", async (req, res) => {
+  try {
+    const a = fs.existsSync(UPLOAD_DIR) ? fs.readdirSync(UPLOAD_DIR) : [];
+    const b = fs.existsSync(path.join(__dirname, "uploads"))
+      ? fs.readdirSync(path.join(__dirname, "uploads"))
+      : [];
+    res.json({ volume: UPLOAD_DIR, volumeFiles: a, localDir: path.join(__dirname, "uploads"), localFiles: b });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ===== MongoDB connect =====
 mongoose
@@ -98,6 +105,7 @@ app.get("/", (req, res) => {
   res.json({ message: "Welcome to Chicken & Rice API 🍚🍗" });
 });
 
+// Protected test route
 app.get("/api/protected", (req, res) => {
   console.log(
     "🔑 Checking JWT_SECRET:",
@@ -128,19 +136,6 @@ app.use("/api/proteinpop", proteinPopRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/drinks", drinkRoutes);
 
-// ✅ NEW: upload routes (saves into UPLOAD_DIR and returns public URL)
-app.use("/api", uploadRoutes);
-
-// ✅ Tiny debug endpoint to list files (optional; remove later)
-app.get("/__uploads", (req, res) => {
-  try {
-    const files = fs.readdirSync(UPLOAD_DIR);
-    res.json({ dir: UPLOAD_DIR, count: files.length, files });
-  } catch (e) {
-    res.status(500).json({ error: e?.message || "list failed" });
-  }
-});
-
 // ===== Email Utility =====
 export const sendEmail = async ({ subject, html }) => {
   try {
@@ -151,7 +146,7 @@ export const sendEmail = async ({ subject, html }) => {
       requireTLS: true,
       auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS, // App password
+        pass: process.env.EMAIL_PASS,
       },
     });
 
