@@ -1,18 +1,27 @@
 // routes/drinkRoutes.js
 import express from "express";
 import Drink from "../models/Drink.js";
-import { upload } from "../middleware/upload.js"; // ✅ uses UPLOAD_DIR (/data/uploads in prod)
+import { upload } from "../middleware/upload.js";
 
 const router = express.Router();
 
 // ==== Create drink ====
 router.post("/", upload.single("imageFile"), async (req, res) => {
   try {
+    if (req.file) {
+      console.log("[upload:drink][CREATE]",
+        "dest=", process.env.UPLOAD_DIR || "/data/uploads",
+        "filename=", req.file.filename
+      );
+    } else {
+      console.log("[upload:drink][CREATE] no file in request");
+    }
+
     const { name, price } = req.body;
     const drink = new Drink({
       name,
       price,
-      image: req.file ? `/uploads/${req.file.filename}` : undefined, // saved on volume
+      image: req.file ? `/uploads/${req.file.filename}` : undefined,
     });
     await drink.save();
     res.status(201).json(drink);
@@ -45,15 +54,18 @@ router.get("/:id", async (req, res) => {
 // ==== Update drink ====
 router.put("/:id", upload.single("imageFile"), async (req, res) => {
   try {
-    const { name, price } = req.body;
-    const updates = { name, price };
     if (req.file) {
-      updates.image = `/uploads/${req.file.filename}`; // saved on volume
+      console.log("[upload:drink][UPDATE]",
+        "dest=", process.env.UPLOAD_DIR || "/data/uploads",
+        "filename=", req.file.filename
+      );
     }
 
-    const drink = await Drink.findByIdAndUpdate(req.params.id, updates, {
-      new: true,
-    });
+    const { name, price } = req.body;
+    const updates = { name, price };
+    if (req.file) updates.image = `/uploads/${req.file.filename}`;
+
+    const drink = await Drink.findByIdAndUpdate(req.params.id, updates, { new: true });
     if (!drink) return res.status(404).json({ error: "Drink not found" });
 
     res.json(drink);

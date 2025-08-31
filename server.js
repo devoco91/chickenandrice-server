@@ -1,13 +1,16 @@
 // server.js
+import "dotenv/config"; // <-- load env FIRST, before other imports that read process.env
+
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
-import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import nodemailer from "nodemailer";
+
+import { upload } from "./middleware/upload.js"; // used for /__diag/upload
 
 // Routes
 import foodRoutes from "./routes/foodRoutes.js";
@@ -20,8 +23,6 @@ import drinkPopRoutes from "./routes/drinkPopRoutes.js";
 import proteinPopRoutes from "./routes/proteinPopRoutes.js";
 import emailRoutes from "./routes/emailRoutes.js";
 import drinkRoutes from "./routes/drinkRoutes.js";
-
-dotenv.config();
 
 const app = express();
 
@@ -58,28 +59,36 @@ app.use(
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// IMPORTANT:
-// - In PRODUCTION (Fly): UPLOAD_DIR should be /data/uploads (volume)
-// - In LOCAL DEV (Windows): set UPLOAD_DIR=uploads to keep it in the project
+// DEV (Windows): set UPLOAD_DIR=uploads
+// PROD (Fly):    set UPLOAD_DIR=/data/uploads  and mount the volume to /data
 const UPLOAD_DIR = (process.env.UPLOAD_DIR || "/data/uploads").replace(/\\/g, "/");
 const LEGACY_DIR = path.join(__dirname, "uploads");
 
-// Ensure both exist; they may be the same or different depending on env
+// Ensure both exist (safe if already exist)
 try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch {}
 try { fs.mkdirSync(LEGACY_DIR, { recursive: true }); } catch {}
 
-// Serve from volume (or configured dir) first
+console.log("🗂  Using UPLOAD_DIR:", UPLOAD_DIR);
+console.log("🗂  Legacy ./uploads:", LEGACY_DIR);
+try {
+  fs.writeFileSync(path.join(UPLOAD_DIR, ".write-test"), "ok");
+  console.log("✍️  UPLOAD_DIR write test: OK");
+  fs.unlinkSync(path.join(UPLOAD_DIR, ".write-test"));
+} catch (e) {
+  console.error("❌ Cannot write to UPLOAD_DIR:", e.message);
+}
+
+// Serve from UPLOAD_DIR first, fallback to ./uploads
 app.use(
   "/uploads",
   express.static(UPLOAD_DIR, { etag: true, maxAge: "365d", immutable: true })
 );
-// Fallback: also serve the local project ./uploads folder
 app.use(
   "/uploads",
   express.static(LEGACY_DIR, { etag: true, maxAge: "365d", immutable: true })
 );
 
-// Debug helper — see where files are and what’s visible
+// ===== Diagnostics (temporary) =====
 app.get("/__uploads", (_req, res) => {
   try {
     const volumeFiles = fs.existsSync(UPLOAD_DIR) ? fs.readdirSync(UPLOAD_DIR) : [];
@@ -93,6 +102,24 @@ app.get("/__uploads", (_req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+app.get("/__diag/ping", (_req, res) => {
+  const canWrite = (() => {
+    try { fs.accessSync(UPLOAD_DIR, fs.constants.W_OK); return true; } catch { return false; }
+  })();
+  res.json({ ok: true, uploadDir: UPLOAD_DIR, canWrite });
+});
+
+app.post("/__diag/upload", upload.single("file"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "no file" });
+  console.log("[__diag/upload]", "dest=", UPLOAD_DIR, "filename=", req.file.filename);
+  return res.json({
+    saved: true,
+    uploadDir: UPLOAD_DIR,
+    filename: req.file.filename,
+    url: `/uploads/${req.file.filename}`,
+  });
 });
 
 // ===== MongoDB connect =====
