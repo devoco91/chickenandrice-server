@@ -41,82 +41,45 @@ const allowedOrigins = [
 
 app.use(
   cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
+    origin: function (origin, cb) {
+      if (!origin) return cb(null, true);
       if (
         allowedOrigins.includes(origin) ||
         allowedOrigins.some((o) => o instanceof RegExp && o.test(origin))
-      ) {
-        return callback(null, true);
-      }
+      ) return cb(null, true);
       console.error("❌ Blocked by CORS:", origin);
-      return callback(new Error("Not allowed by CORS: " + origin));
+      return cb(new Error("Not allowed by CORS: " + origin));
     },
     credentials: true,
   })
 );
 
-// ===== Static uploads (volume first, with migrate+symlink safety) =====
+// ===== Static uploads =====
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || "/data/uploads"; // volume
-const LEGACY_DIR = path.join(__dirname, "uploads"); // old path inside app
+// IMPORTANT:
+// - In PRODUCTION (Fly): UPLOAD_DIR should be /data/uploads (volume)
+// - In LOCAL DEV (Windows): set UPLOAD_DIR=uploads to keep it in the project
+const UPLOAD_DIR = (process.env.UPLOAD_DIR || "/data/uploads").replace(/\\/g, "/");
+const LEGACY_DIR = path.join(__dirname, "uploads");
 
-try {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-} catch {}
+// Ensure both exist; they may be the same or different depending on env
+try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch {}
+try { fs.mkdirSync(LEGACY_DIR, { recursive: true }); } catch {}
 
-// Migrate files from ./uploads → /data/uploads once, then symlink ./uploads → /data/uploads
-try {
-  const legacyExists = fs.existsSync(LEGACY_DIR);
-  if (legacyExists) {
-    const isLink = fs.lstatSync(LEGACY_DIR).isSymbolicLink?.() || false;
-    if (!isLink) {
-      // move any existing files
-      try {
-        for (const item of fs.readdirSync(LEGACY_DIR)) {
-          const src = path.join(LEGACY_DIR, item);
-          const dst = path.join(UPLOAD_DIR, item);
-          try {
-            fs.renameSync(src, dst);
-          } catch {
-            /* ignore conflicts */
-          }
-        }
-      } catch {}
-      // replace folder with symlink
-      try {
-        fs.rmSync(LEGACY_DIR, { recursive: true, force: true });
-      } catch {}
-      try {
-        fs.symlinkSync(UPLOAD_DIR, LEGACY_DIR);
-      } catch {}
-    }
-  } else {
-    // create symlink if missing
-    try {
-      fs.symlinkSync(UPLOAD_DIR, LEGACY_DIR);
-    } catch {}
-  }
-} catch (e) {
-  console.log("uploads symlink setup:", e.message);
-}
-
-// Serve from volume first
+// Serve from volume (or configured dir) first
 app.use(
   "/uploads",
-  express.static(UPLOAD_DIR, {
-    etag: true,
-    maxAge: "365d",
-    immutable: true,
-  })
+  express.static(UPLOAD_DIR, { etag: true, maxAge: "365d", immutable: true })
+);
+// Fallback: also serve the local project ./uploads folder
+app.use(
+  "/uploads",
+  express.static(LEGACY_DIR, { etag: true, maxAge: "365d", immutable: true })
 );
 
-// Fallback: serve from legacy path (now typically a symlink)
-app.use("/uploads", express.static(LEGACY_DIR));
-
-// Debug helper
+// Debug helper — see where files are and what’s visible
 app.get("/__uploads", (_req, res) => {
   try {
     const volumeFiles = fs.existsSync(UPLOAD_DIR) ? fs.readdirSync(UPLOAD_DIR) : [];
@@ -147,15 +110,11 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/api/protected", (req, res) => {
-  console.log("🔑 Checking JWT_SECRET:", process.env.JWT_SECRET ? "[LOADED]" : "[MISSING]");
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "No token provided" });
 
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-    if (err) {
-      console.error("❌ JWT verification failed:", err.message);
-      return res.status(403).json({ error: "Invalid token" });
-    }
+    if (err) return res.status(403).json({ error: "Invalid token" });
     res.json({ message: "Protected route access granted", user: decoded });
   });
 });
@@ -173,31 +132,22 @@ app.use("/api/drinks", drinkRoutes);
 
 // ===== Email Utility =====
 export const sendEmail = async ({ subject, html }) => {
-  try {
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      requireTLS: true,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    requireTLS: true,
+    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+  });
 
-    const mailOptions = {
-      from: `"Chicken & Rice" <${process.env.EMAIL_USER}>`,
-      to: "chickenandriceltd@gmail.com",
-      subject,
-      html,
-    };
+  const mailOptions = {
+    from: `"Chicken & Rice" <${process.env.EMAIL_USER}>`,
+    to: "chickenandriceltd@gmail.com",
+    subject,
+    html,
+  };
 
-    await transporter.sendMail(mailOptions);
-    console.log("✅ Email sent successfully");
-  } catch (err) {
-    console.error("❌ Email sending failed:", err.message);
-    throw err;
-  }
+  await transporter.sendMail(mailOptions);
 };
 
 // ===== Error handler =====
@@ -208,12 +158,6 @@ app.use((err, _req, res, _next) => {
 
 // ===== Start server =====
 const PORT = process.env.PORT || 3000;
-let portSource = process.env.PORT
-  ? process.env.FLY_APP_NAME
-    ? "Fly (injected)"
-    : ".env/local"
-  : "default (3000)";
-
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server running on http://localhost:${PORT} [${portSource}]`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
