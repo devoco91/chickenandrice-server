@@ -5,7 +5,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import path from "path";
-import fs from "fs"; // ⬅️ added
+import fs from "fs";
 import { fileURLToPath } from "url";
 import nodemailer from "nodemailer";
 
@@ -38,6 +38,7 @@ const allowedOrigins = [
   "http://127.0.0.1:3000",
   "https://chickenandrice.vercel.app",
 ];
+
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -55,17 +56,54 @@ app.use(
   })
 );
 
-// ===== Static uploads (volume first, then local fallback) =====
+// ===== Static uploads (volume first, with migrate+symlink safety) =====
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Use volume in prod, or local folder in dev if provided
-const UPLOAD_DIR = process.env.UPLOAD_DIR || "/data/uploads";
+const UPLOAD_DIR = process.env.UPLOAD_DIR || "/data/uploads"; // volume
+const LEGACY_DIR = path.join(__dirname, "uploads"); // old path inside app
+
 try {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 } catch {}
 
-// Serve from the configured uploads dir (Fly volume in prod)
+// Migrate files from ./uploads → /data/uploads once, then symlink ./uploads → /data/uploads
+try {
+  const legacyExists = fs.existsSync(LEGACY_DIR);
+  if (legacyExists) {
+    const isLink = fs.lstatSync(LEGACY_DIR).isSymbolicLink?.() || false;
+    if (!isLink) {
+      // move any existing files
+      try {
+        for (const item of fs.readdirSync(LEGACY_DIR)) {
+          const src = path.join(LEGACY_DIR, item);
+          const dst = path.join(UPLOAD_DIR, item);
+          try {
+            fs.renameSync(src, dst);
+          } catch {
+            /* ignore conflicts */
+          }
+        }
+      } catch {}
+      // replace folder with symlink
+      try {
+        fs.rmSync(LEGACY_DIR, { recursive: true, force: true });
+      } catch {}
+      try {
+        fs.symlinkSync(UPLOAD_DIR, LEGACY_DIR);
+      } catch {}
+    }
+  } else {
+    // create symlink if missing
+    try {
+      fs.symlinkSync(UPLOAD_DIR, LEGACY_DIR);
+    } catch {}
+  }
+} catch (e) {
+  console.log("uploads symlink setup:", e.message);
+}
+
+// Serve from volume first
 app.use(
   "/uploads",
   express.static(UPLOAD_DIR, {
@@ -75,17 +113,20 @@ app.use(
   })
 );
 
-// Fallback: also serve from project ./uploads (in case of legacy files)
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// Fallback: serve from legacy path (now typically a symlink)
+app.use("/uploads", express.static(LEGACY_DIR));
 
-// (Optional debug): list files
-app.get("/__uploads", async (req, res) => {
+// Debug helper
+app.get("/__uploads", (_req, res) => {
   try {
-    const a = fs.existsSync(UPLOAD_DIR) ? fs.readdirSync(UPLOAD_DIR) : [];
-    const b = fs.existsSync(path.join(__dirname, "uploads"))
-      ? fs.readdirSync(path.join(__dirname, "uploads"))
-      : [];
-    res.json({ volume: UPLOAD_DIR, volumeFiles: a, localDir: path.join(__dirname, "uploads"), localFiles: b });
+    const volumeFiles = fs.existsSync(UPLOAD_DIR) ? fs.readdirSync(UPLOAD_DIR) : [];
+    const legacyFiles = fs.existsSync(LEGACY_DIR) ? fs.readdirSync(LEGACY_DIR) : [];
+    res.json({
+      uploadDir: UPLOAD_DIR,
+      volumeFiles,
+      legacyDir: LEGACY_DIR,
+      legacyFiles,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -101,17 +142,12 @@ mongoose
   });
 
 // ===== Routes =====
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   res.json({ message: "Welcome to Chicken & Rice API 🍚🍗" });
 });
 
-// Protected test route
 app.get("/api/protected", (req, res) => {
-  console.log(
-    "🔑 Checking JWT_SECRET:",
-    process.env.JWT_SECRET ? "[LOADED]" : "[MISSING]"
-  );
-
+  console.log("🔑 Checking JWT_SECRET:", process.env.JWT_SECRET ? "[LOADED]" : "[MISSING]");
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "No token provided" });
 
@@ -124,7 +160,6 @@ app.get("/api/protected", (req, res) => {
   });
 });
 
-// Modular routes
 app.use("/api/foods", foodRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/delivery", deliverymanRoutes);
@@ -166,7 +201,7 @@ export const sendEmail = async ({ subject, html }) => {
 };
 
 // ===== Error handler =====
-app.use((err, req, res, next) => {
+app.use((err, _req, res, _next) => {
   console.error("⚠️ Server error:", err.message);
   res.status(500).json({ error: "Something went wrong" });
 });
@@ -179,6 +214,6 @@ let portSource = process.env.PORT
     : ".env/local"
   : "default (3000)";
 
-app.listen(PORT, "0.0.0.0", () =>
-  console.log(`🚀 Server running on http://localhost:${PORT} [${portSource}]`)
-);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running on http://localhost:${PORT} [${portSource}]`);
+});
