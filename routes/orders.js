@@ -32,6 +32,13 @@ const pickSmartDeliveryman = async (excludeId = null) => {
   return loads[0].deliveryman;
 };
 
+// Helpers to clean special prefixes added by client when using geolocation
+const stripAutoDetected = (s = "") =>
+  String(s).replace(/^Auto\s*detected,?\s*/i, "").trim();
+
+const stripUsingCurrentLocation = (s = "") =>
+  String(s).replace(/^Using\s+(your\s+)?current\s+location,?\s*/i, "").trim();
+
 // ================================
 // 📌 Normalize location into GeoJSON
 // ================================
@@ -53,9 +60,9 @@ async function normalizeGeoLocation(raw, street = "", houseNumber = "") {
     return { type: "Point", coordinates: [Number(raw.lng), Number(raw.lat)] };
   }
 
-  // Clean "Auto detected" prefix before geocoding
-  if (street) {
-    const cleanedStreet = street.replace(/^Auto\s*detected,?/i, "").trim();
+  // Clean client-set prefixes before geocoding
+  const cleanedStreet = stripUsingCurrentLocation(stripAutoDetected(street));
+  if (cleanedStreet) {
     const address = `${houseNumber || ""} ${cleanedStreet}`.trim();
     const coords = await geocodeAddress(address);
     if (coords) {
@@ -76,6 +83,8 @@ router.post("/", async (req, res) => {
 
     const items = Array.isArray(body.items)
       ? body.items.map((it) => ({
+          // ✅ keep foodId from client (if your schema uses it)
+          foodId: it.foodId,
           name: it.name,
           quantity: Number(it.quantity),
           price: Number(it.price),
@@ -112,13 +121,14 @@ router.post("/", async (req, res) => {
         body.street,
         body.houseNumber
       );
+
       orderData = {
         ...orderData,
         customerName: body.customerName,
         phone: body.phone,
         houseNumber: body.houseNumber,
-        // ✅ Strip "Auto detected" before saving street
-        street: body.street?.replace(/^Auto\s*detected,?/i, "").trim(),
+        // ✅ Strip both "Auto detected" and "Using current location" before saving
+        street: stripUsingCurrentLocation(stripAutoDetected(body.street || "")),
         landmark: body.landmark,
         location: normalizedLoc,
       };
@@ -262,7 +272,7 @@ router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     await Order.findByIdAndDelete(id);
-    res.json({ ok: true });
+  res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -1,7 +1,7 @@
 // routes/foodRoutes.js
 import express from "express";
 import Food from "../models/Food.js";
-import { upload } from "../middleware/upload.js"; // ✅ use shared storage (points to UPLOAD_DIR)
+import { upload } from "../middleware/upload.js";
 
 const router = express.Router();
 
@@ -33,7 +33,7 @@ router.get("/popular", async (_req, res) => {
   try {
     const foods = await Food.find({ isPopular: true }).sort({ createdAt: -1 });
     res.json(foods);
-  } catch (_err) {
+  } catch {
     res.status(500).json({ error: "Failed to fetch popular foods" });
   }
 });
@@ -43,7 +43,7 @@ router.get("/all", async (_req, res) => {
   try {
     const foods = await Food.find().sort({ createdAt: -1 });
     res.json(foods);
-  } catch (_err) {
+  } catch {
     res.status(500).json({ error: "Failed to fetch all foods" });
   }
 });
@@ -54,7 +54,7 @@ router.get("/:id", async (req, res) => {
     const food = await Food.findById(req.params.id);
     if (!food) return res.status(404).json({ error: "Food not found" });
     res.json(food);
-  } catch (_err) {
+  } catch {
     res.status(500).json({ error: "Failed to fetch food" });
   }
 });
@@ -82,7 +82,7 @@ router.post("/", upload.single("imageFile"), async (req, res) => {
       isPopular: isPopular === "true" || isPopular === true,
       state,
       lgas: lgas ? JSON.parse(lgas) : [],
-      image: req.file ? `/uploads/${req.file.filename}` : null, // ✅ saved on volume via middleware
+      image: req.file ? `/uploads/${req.file.filename}` : null,
     });
 
     await food.save();
@@ -118,12 +118,10 @@ router.put("/:id", upload.single("imageFile"), async (req, res) => {
     };
 
     if (req.file) {
-      updateData.image = `/uploads/${req.file.filename}`; // ✅ saved on volume via middleware
+      updateData.image = `/uploads/${req.file.filename}`;
     }
 
-    const food = await Food.findByIdAndUpdate(req.params.id, updateData, {
-      new: true,
-    });
+    const food = await Food.findByIdAndUpdate(req.params.id, updateData, { new: true });
     if (!food) return res.status(404).json({ error: "Food not found" });
 
     res.json(food);
@@ -138,7 +136,7 @@ router.delete("/:id", async (req, res) => {
     const food = await Food.findByIdAndDelete(req.params.id);
     if (!food) return res.status(404).json({ error: "Food not found" });
     res.json({ message: "Food deleted successfully" });
-  } catch (_err) {
+  } catch {
     res.status(500).json({ error: "Failed to delete food" });
   }
 });

@@ -1,128 +1,56 @@
-// routes/foodRoutes.js
+// routes/foodPopRoutes.js
 import express from "express";
-import Food from "../models/Food.js";
-import { upload } from "../middleware/upload.js";
+import FoodPop from "../models/FoodPop.js";
 
 const router = express.Router();
 
-const toBool = (v) => v === true || v === "true" || v === 1 || v === "1";
-const derivePopular = (isPopular, category) =>
-  toBool(isPopular) || (typeof category === "string" && category === "Popular");
-
-// ---- Get all foods OR filter by state/lga/category ----
+// GET all foods
 router.get("/", async (req, res) => {
   try {
-    const { state, lga, category } = req.query;
-    let query = {};
-
-    if (state && lga) query = { state, lgas: { $in: [lga] } };
-    else if (state) query = { state };
-
-    if (category) query.category = { $in: category.split(",") };
-
-    const foods = await Food.find(query).sort({ createdAt: -1 });
-    res.json(foods);
+    const items = await FoodPop.find().sort({ createdAt: -1 });
+    res.json(items);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch foods" });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ---- Get only popular foods ----
-router.get("/popular", async (_req, res) => {
+// POST create food
+router.post("/", async (req, res) => {
   try {
-    const foods = await Food.find({ isPopular: true }).sort({ createdAt: -1 });
-    res.json(foods);
-  } catch {
-    res.status(500).json({ error: "Failed to fetch popular foods" });
-  }
-});
-
-// ---- Get all foods (shortcut) ----
-router.get("/all", async (_req, res) => {
-  try {
-    const foods = await Food.find().sort({ createdAt: -1 });
-    res.json(foods);
-  } catch {
-    res.status(500).json({ error: "Failed to fetch all foods" });
-  }
-});
-
-// ---- Get a single food by ID ----
-router.get("/:id", async (req, res) => {
-  try {
-    const food = await Food.findById(req.params.id);
-    if (!food) return res.status(404).json({ error: "Food not found" });
-    res.json(food);
-  } catch {
-    res.status(500).json({ error: "Failed to fetch food" });
-  }
-});
-
-// ---- Create food ----
-router.post("/", upload.single("imageFile"), async (req, res) => {
-  try {
-    const {
-      name, description, price, category,
-      isAvailable, isPopular, state, lgas,
-    } = req.body;
-
-    const food = new Food({
-      name,
-      description,
-      price,
-      category,
-      isAvailable: toBool(isAvailable),
-      isPopular: derivePopular(isPopular, category),
-      state,
-      lgas: lgas ? JSON.parse(lgas) : [],
-      image: req.file ? `/uploads/${req.file.filename}` : null,
+    const item = new FoodPop({ 
+      name: req.body.name, 
+      price: req.body.price 
     });
-
-    await food.save();
-    res.status(201).json(food);
+    await item.save();
+    res.status(201).json(item);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// ---- Update food ----
-router.put("/:id", upload.single("imageFile"), async (req, res) => {
+// PUT update food
+router.put("/:id", async (req, res) => {
   try {
-    const {
-      name, description, price, category,
-      isAvailable, isPopular, state, lgas,
-    } = req.body;
-
-    const updateData = {
-      name,
-      description,
-      price,
-      category,
-      isAvailable: toBool(isAvailable),
-      isPopular: derivePopular(isPopular, category),
-      state,
-      lgas: lgas ? JSON.parse(lgas) : [],
-    };
-
-    if (req.file) updateData.image = `/uploads/${req.file.filename}`;
-
-    const food = await Food.findByIdAndUpdate(req.params.id, updateData, { new: true });
-    if (!food) return res.status(404).json({ error: "Food not found" });
-
-    res.json(food);
+    const item = await FoodPop.findByIdAndUpdate(
+      req.params.id,
+      { name: req.body.name, price: req.body.price },
+      { new: true }
+    );
+    if (!item) return res.status(404).json({ error: "Not found" });
+    res.json(item);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// ---- Delete food ----
+// DELETE food
 router.delete("/:id", async (req, res) => {
   try {
-    const food = await Food.findByIdAndDelete(req.params.id);
-    if (!food) return res.status(404).json({ error: "Food not found" });
-    res.json({ message: "Food deleted successfully" });
-  } catch {
-    res.status(500).json({ error: "Failed to delete food" });
+    const item = await FoodPop.findByIdAndDelete(req.params.id);
+    if (!item) return res.status(404).json({ error: "Not found" });
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

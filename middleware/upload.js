@@ -1,17 +1,10 @@
-// middleware/upload.js
+// middlewares/upload.js
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 
-// Resolve the upload dir at request time (so it works even if dotenv
-// wasn’t loaded before this module was imported).
-const resolveUploadDir = () => {
-  const dir = (process.env.UPLOAD_DIR || "/data/uploads").replace(/\\/g, "/");
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch {}
-  return dir;
-};
+const UPLOAD_DIR = (process.env.UPLOAD_DIR || "/data/uploads").replace(/\\/g, "/");
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 function sanitizeName(original) {
   const ext = path.extname(original).toLowerCase();
@@ -21,10 +14,7 @@ function sanitizeName(original) {
 }
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    const dir = resolveUploadDir();
-    cb(null, dir);
-  },
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => cb(null, sanitizeName(file.originalname)),
 });
 

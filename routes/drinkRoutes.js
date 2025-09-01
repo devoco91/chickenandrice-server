@@ -5,18 +5,9 @@ import { upload } from "../middleware/upload.js";
 
 const router = express.Router();
 
-// ==== Create drink ====
+// Create drink
 router.post("/", upload.single("imageFile"), async (req, res) => {
   try {
-    if (req.file) {
-      console.log("[upload:drink][CREATE]",
-        "dest=", process.env.UPLOAD_DIR || "/data/uploads",
-        "filename=", req.file.filename
-      );
-    } else {
-      console.log("[upload:drink][CREATE] no file in request");
-    }
-
     const { name, price } = req.body;
     const drink = new Drink({
       name,
@@ -30,7 +21,7 @@ router.post("/", upload.single("imageFile"), async (req, res) => {
   }
 });
 
-// ==== Get all drinks ====
+// Get all drinks
 router.get("/", async (_req, res) => {
   try {
     const drinks = await Drink.find().sort({ createdAt: -1 });
@@ -40,7 +31,7 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// ==== Get single drink ====
+// Get single drink
 router.get("/:id", async (req, res) => {
   try {
     const drink = await Drink.findById(req.params.id);
@@ -51,19 +42,14 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// ==== Update drink ====
+// Update drink
 router.put("/:id", upload.single("imageFile"), async (req, res) => {
   try {
-    if (req.file) {
-      console.log("[upload:drink][UPDATE]",
-        "dest=", process.env.UPLOAD_DIR || "/data/uploads",
-        "filename=", req.file.filename
-      );
-    }
-
     const { name, price } = req.body;
     const updates = { name, price };
-    if (req.file) updates.image = `/uploads/${req.file.filename}`;
+    if (req.file) {
+      updates.image = `/uploads/${req.file.filename}`;
+    }
 
     const drink = await Drink.findByIdAndUpdate(req.params.id, updates, { new: true });
     if (!drink) return res.status(404).json({ error: "Drink not found" });
@@ -74,7 +60,7 @@ router.put("/:id", upload.single("imageFile"), async (req, res) => {
   }
 });
 
-// ==== Delete drink ====
+// Delete drink
 router.delete("/:id", async (req, res) => {
   try {
     const drink = await Drink.findByIdAndDelete(req.params.id);
