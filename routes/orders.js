@@ -1,16 +1,13 @@
-// ================================
 // backend/routes/orders.js
-// ================================
 import express from "express";
 import Order from "../models/Order.js";
 import Deliveryman from "../models/Deliveryman.js";
 import { geocodeAddress } from "../utils/geocode.js";
+import { sendEmail } from "../utils/mailer.js";
 
 const router = express.Router();
 
-// ================================
-// 📌 Pick online deliveryman with least active orders
-// ================================
+// pick least-loaded online deliveryman
 const pickSmartDeliveryman = async (excludeId = null) => {
   const query = { isOnline: true };
   if (excludeId) query._id = { $ne: excludeId };
@@ -32,22 +29,17 @@ const pickSmartDeliveryman = async (excludeId = null) => {
   return loads[0].deliveryman;
 };
 
-// Helpers to clean special prefixes added by client when using geolocation
+// helpers for client-added prefixes
 const stripAutoDetected = (s = "") =>
   String(s).replace(/^Auto\s*detected,?\s*/i, "").trim();
-
 const stripUsingCurrentLocation = (s = "") =>
   String(s).replace(/^Using\s+(your\s+)?current\s+location,?\s*/i, "").trim();
 
-// ================================
-// 📌 Normalize location into GeoJSON
-// ================================
+// geo normalization
 async function normalizeGeoLocation(raw, street = "", houseNumber = "") {
   const fallback = { type: "Point", coordinates: [3.3792, 6.5244] };
-
   if (!raw && !street) return fallback;
 
-  // Already a Point
   if (raw?.type === "Point" && Array.isArray(raw.coordinates)) {
     let [lng, lat] = raw.coordinates.map(Number);
     const looksReversed = Math.abs(lng) <= 90 && Math.abs(lat) > 90;
@@ -55,12 +47,10 @@ async function normalizeGeoLocation(raw, street = "", houseNumber = "") {
     return { type: "Point", coordinates: [lng, lat] };
   }
 
-  // Raw lat/lng
   if (raw?.lat != null && raw?.lng != null) {
     return { type: "Point", coordinates: [Number(raw.lng), Number(raw.lat)] };
   }
 
-  // Clean client-set prefixes before geocoding
   const cleanedStreet = stripUsingCurrentLocation(stripAutoDetected(street));
   if (cleanedStreet) {
     const address = `${houseNumber || ""} ${cleanedStreet}`.trim();
@@ -73,8 +63,20 @@ async function normalizeGeoLocation(raw, street = "", houseNumber = "") {
   return fallback;
 }
 
+const money = (n) =>
+  "₦" +
+  (Number(n || 0)).toLocaleString("en-NG", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+
+function escapeHtml(s = "") {
+  return String(s)
+    .replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+}
+
 // ================================
-// 📌 Create Order
+// Create Order
 // ================================
 router.post("/", async (req, res) => {
   try {
@@ -83,7 +85,6 @@ router.post("/", async (req, res) => {
 
     const items = Array.isArray(body.items)
       ? body.items.map((it) => ({
-          // ✅ keep foodId from client (if your schema uses it)
           foodId: it.foodId,
           name: it.name,
           quantity: Number(it.quantity),
@@ -101,8 +102,8 @@ router.post("/", async (req, res) => {
 
     const rawPM = String(body.paymentMode || "").toLowerCase();
     let paymentMode = undefined;
-    if (["cash", "card", "upi"].includes(rawPM)) paymentMode = rawPM;
-    else if (rawPM === "transfer") paymentMode = "upi";
+    if (["cash", "card", "transfer"].includes(rawPM)) paymentMode = rawPM;
+    else if (rawPM === "upi") paymentMode = "transfer"; // normalize older clients
 
     let orderData = {
       items,
@@ -127,7 +128,6 @@ router.post("/", async (req, res) => {
         customerName: body.customerName,
         phone: body.phone,
         houseNumber: body.houseNumber,
-        // ✅ Strip both "Auto detected" and "Using current location" before saving
         street: stripUsingCurrentLocation(stripAutoDetected(body.street || "")),
         landmark: body.landmark,
         location: normalizedLoc,
@@ -158,6 +158,79 @@ router.post("/", async (req, res) => {
 
     await order.save();
     await order.populate("assignedTo", "name email phone isOnline");
+
+    // ====== EMAIL ON ONLINE ORDER ======
+    if (orderType === "online") {
+      try {
+        const when = new Date(order.createdAt || Date.now());
+        const dt = when.toLocaleString("en-NG", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+
+        const itemsHtml = (order.items || [])
+          .map(
+            (it) => `
+              <tr>
+                <td style="padding:8px;border:1px solid #eee">${escapeHtml(it.name || "Item")}</td>
+                <td style="padding:8px;border:1px solid #eee;text-align:center">${Number(it.quantity) || 0}</td>
+                <td style="padding:8px;border:1px solid #eee;text-align:right">${money(it.price)}</td>
+              </tr>
+            `
+          )
+          .join("");
+
+        const html = `
+          <div style="font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;line-height:1.4;color:#111">
+            <h2 style="margin:0 0 8px">🛒 New Online Order</h2>
+            <p style="margin:0 0 12px;color:#444">Time: <strong>${dt}</strong></p>
+
+            <h3 style="margin:16px 0 8px">Customer</h3>
+            <table style="border-collapse:collapse;width:100%;max-width:560px">
+              <tbody>
+                <tr><td style="padding:8px;border:1px solid #eee">Name</td><td style="padding:8px;border:1px solid #eee"><strong>${escapeHtml(order.customerName || "-")}</strong></td></tr>
+                <tr><td style="padding:8px;border:1px solid #eee">Phone</td><td style="padding:8px;border:1px solid #eee"><strong>${escapeHtml(order.phone || "-")}</strong></td></tr>
+                <tr><td style="padding:8px;border:1px solid #eee">Address</td><td style="padding:8px;border:1px solid #eee"><strong>${escapeHtml([order.houseNumber, order.street, order.landmark].filter(Boolean).join(" "))}</strong></td></tr>
+              </tbody>
+            </table>
+
+            <h3 style="margin:16px 0 8px">Items</h3>
+            <table style="border-collapse:collapse;width:100%;max-width:560px">
+              <thead>
+                <tr>
+                  <th style="padding:8px;border:1px solid #eee;text-align:left">Item</th>
+                  <th style="padding:8px;border:1px solid #eee;text-align:center">Qty</th>
+                  <th style="padding:8px;border:1px solid #eee;text-align:right">Price</th>
+                </tr>
+              </thead>
+              <tbody>${itemsHtml}</tbody>
+              <tfoot>
+                <tr><td colspan="2" style="padding:8px;border:1px solid #eee;text-align:right">Subtotal</td><td style="padding:8px;border:1px solid #eee;text-align:right"><strong>${money(order.subtotal)}</strong></td></tr>
+                <tr><td colspan="2" style="padding:8px;border:1px solid #eee;text-align:right">Delivery fee</td><td style="padding:8px;border:1px solid #eee;text-align:right"><strong>${money(order.deliveryFee)}</strong></td></tr>
+                <tr><td colspan="2" style="padding:8px;border:1px solid #eee;text-align:right">Tax</td><td style="padding:8px;border:1px solid #eee;text-align:right"><strong>${money(order.tax)}</strong></td></tr>
+                <tr><td colspan="2" style="padding:8px;border:1px solid #eee;text-align:right;background:#fafafa">Total</td><td style="padding:8px;border:1px solid #eee;text-align:right;background:#fafafa"><strong>${money(order.total)}</strong></td></tr>
+              </tfoot>
+            </table>
+
+            <p style="margin:16px 0 0;color:#666">
+              Payment: <strong>${escapeHtml(order.paymentMode || "-")}</strong>
+              ${order.assignedTo ? `<br/>Assigned to: <strong>${escapeHtml(order.assignedTo.name || "")}</strong>` : ""}
+            </p>
+          </div>
+        `;
+
+        await sendEmail({
+          subject: `New Online Order – ${money(order.total)} – ${order.customerName || ""}`,
+          html,
+        });
+      } catch (e) {
+        console.warn("Order email failed (non-fatal):", e?.message || e);
+      }
+    }
+
     res.status(201).json(order);
   } catch (err) {
     res.status(400).json({ error: err.message, received: req.body });
@@ -165,14 +238,13 @@ router.post("/", async (req, res) => {
 });
 
 // ================================
-// 📌 Get Orders (all / filter by type)
+// Other getters and mutations
 // ================================
 router.get("/", async (req, res) => {
   try {
     const { type } = req.query;
     let filter = {};
     if (type) filter.orderType = type;
-
     const orders = await Order.find(filter).populate("assignedTo", "name email phone isOnline");
     res.json(orders);
   } catch (err) {
@@ -180,8 +252,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-// 📌 Get Online Orders
-router.get("/online", async (req, res) => {
+router.get("/online", async (_req, res) => {
   try {
     const orders = await Order.find({ orderType: "online" }).populate(
       "assignedTo",
@@ -193,8 +264,7 @@ router.get("/online", async (req, res) => {
   }
 });
 
-// 📌 Get In-store Orders
-router.get("/instore", async (req, res) => {
+router.get("/instore", async (_req, res) => {
   try {
     const orders = await Order.find({ orderType: "instore" });
     res.json(orders);
@@ -203,37 +273,30 @@ router.get("/instore", async (req, res) => {
   }
 });
 
-// 📌 Get Assigned Orders
-router.get("/assigned", async (req, res) => {
+router.get("/assigned", async (_req, res) => {
   try {
     const orders = await Order.find({
       status: "assigned",
       orderType: { $in: ["online", null] },
     }).populate("assignedTo", "name email phone isOnline");
-
     res.json(orders);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ================================
-// 📌 Update Order Status
-// ================================
 router.patch("/:id/status", async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-
     if (!["accepted", "in-transit", "delivered", "cancelled"].includes(status)) {
       return res.status(400).json({ error: "Invalid status update" });
     }
-
-    const order = await Order.findByIdAndUpdate(id, { status }, { new: true }).populate(
-      "assignedTo",
-      "name email phone isOnline"
-    );
-
+    const order = await Order.findByIdAndUpdate(
+      id,
+      { status },
+      { new: true }
+    ).populate("assignedTo", "name email phone isOnline");
     if (!order) return res.status(404).json({ error: "Order not found" });
     res.json(order);
   } catch (err) {
@@ -241,20 +304,12 @@ router.patch("/:id/status", async (req, res) => {
   }
 });
 
-// ================================
-// 📌 Get Orders by Status
-// ================================
 router.get("/status/:status", async (req, res) => {
   try {
     const { status } = req.params;
-    if (
-      !["pending", "assigned", "accepted", "in-transit", "delivered", "cancelled"].includes(
-        status
-      )
-    ) {
+    if (!["pending", "assigned", "accepted", "in-transit", "delivered", "cancelled"].includes(status)) {
       return res.status(400).json({ error: "Invalid status filter" });
     }
-
     const orders = await Order.find({ status, orderType: "online" }).populate(
       "assignedTo",
       "name email phone isOnline"
@@ -265,14 +320,27 @@ router.get("/status/:status", async (req, res) => {
   }
 });
 
-// ================================
-// 📌 Delete Order (Admin)
-// ================================
 router.delete("/:id", async (req, res) => {
   try {
+    await Order.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// admin assign/reassign
+router.patch("/:id/assign", async (req, res) => {
+  try {
     const { id } = req.params;
-    await Order.findByIdAndDelete(id);
-  res.json({ ok: true });
+    const { assignedTo, status } = req.body;
+    const update = {};
+    if (assignedTo) update.assignedTo = assignedTo;
+    if (status) update.status = status;
+    const order = await Order.findByIdAndUpdate(id, update, { new: true })
+      .populate("assignedTo", "name email phone isOnline");
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    res.json(order);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

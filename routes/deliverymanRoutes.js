@@ -48,7 +48,8 @@ const pickSmartDeliveryman = async (excludeId = null) => {
     online.map(async (dm) => {
       const active = await Order.countDocuments({
         assignedTo: dm._id,
-        status: { $in: ["pending", "assigned", "in-transit"] },
+        // ✅ include "accepted" as active
+        status: { $in: ["pending", "assigned", "accepted", "in-transit"] },
       });
       return { deliveryman: dm, activeOrders: active };
     })
@@ -311,9 +312,10 @@ router.get("/orders/assigned", auth, async (req, res) => {
   try {
     const orders = await Order.find({
       assignedTo: req.user.id,
-      status: { $in: ["assigned", "in-transit"] }
+      // ✅ include "accepted" so it stays visible after Accept
+      status: { $in: ["assigned", "accepted", "in-transit"] }
     }).sort({ createdAt: -1 });
-  res.json(orders);
+    res.json(orders);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

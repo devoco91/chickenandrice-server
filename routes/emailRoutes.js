@@ -1,64 +1,70 @@
-// routes/emailRoutes.js
+// backend/routes/emailRoutes.js
 import express from "express";
-import { sendEmail } from "../server.js";
+import { sendEmail } from "../utils/mailer.js";
 
 const router = express.Router();
 
+const money = (n) =>
+  "₦" +
+  (Number(n || 0)).toLocaleString("en-NG", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+
+/**
+ * Generic email sender (already had)
+ * POST /api/email
+ * Body: { to?, subject, html?, text?, from? }
+ */
+router.post("/", async (req, res) => {
+  try {
+    const { to, subject, html, text, from } = req.body || {};
+    if (!subject || (!html && !text)) {
+      return res.status(400).json({ error: "subject and html or text are required" });
+    }
+    await sendEmail({ to, subject, html, text, from });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("Email send error:", e);
+    res.status(500).json({ error: "Failed to send email" });
+  }
+});
+
+/**
+ * Daily in-shop sales report used by your "Close Sales" button.
+ * POST /api/email/send-sales-report
+ * Body: { amount, cash, card, transfer, date }
+ */
 router.post("/send-sales-report", async (req, res) => {
   try {
-    const { amount, cash, card, transfer, date } = req.body;
+    const { amount, cash, card, transfer, date } = req.body || {};
+    const when = date || new Date().toISOString().split("T")[0];
 
-    if (!amount || !date) {
-      return res.status(400).json({ error: "Missing amount or date" });
-    }
-
-    // ✅ Styled HTML email with breakdown
     const html = `
-      <h2>Chicken & Rice Ltd - Daily Sales Report</h2>
-      <p><strong>Date:</strong> ${date}</p>
-      <p><strong>Total Sales:</strong> ₦${Number(amount).toLocaleString()}</p>
-
-      <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; margin-top:10px; font-family: Arial, sans-serif;">
-        <thead style="background:#f4f4f4;">
-          <tr>
-            <th align="left">Payment Mode</th>
-            <th align="right">Amount (₦)</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Cash</td>
-            <td align="right">${Number(cash || 0).toLocaleString()}</td>
-          </tr>
-          <tr>
-            <td>Card</td>
-            <td align="right">${Number(card || 0).toLocaleString()}</td>
-          </tr>
-          <tr>
-            <td>Transfer</td>
-            <td align="right">${Number(transfer || 0).toLocaleString()}</td>
-          </tr>
-          <tr style="font-weight:bold; background:#fafafa;">
-            <td>Total</td>
-            <td align="right">${Number(amount || 0).toLocaleString()}</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <br/>
-      <p>Regards,</p>
-      <p><em>Chicken & Rice System</em></p>
+      <div style="font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;line-height:1.4;color:#111">
+        <h2 style="margin:0 0 8px">🧾 Daily In-Shop Sales Report</h2>
+        <p style="margin:0 0 12px;color:#444">Date: <strong>${when}</strong></p>
+        <table style="border-collapse:collapse;width:100%;max-width:520px">
+          <tbody>
+            <tr><td style="padding:8px;border:1px solid #eee">Cash</td><td style="padding:8px;border:1px solid #eee"><strong>${money(cash)}</strong></td></tr>
+            <tr><td style="padding:8px;border:1px solid #eee">Card</td><td style="padding:8px;border:1px solid #eee"><strong>${money(card)}</strong></td></tr>
+            <tr><td style="padding:8px;border:1px solid #eee">Transfer</td><td style="padding:8px;border:1px solid #eee"><strong>${money(transfer)}</strong></td></tr>
+            <tr><td style="padding:8px;border:1px solid #eee;background:#fafafa"><strong>Total</strong></td><td style="padding:8px;border:1px solid #eee;background:#fafafa"><strong>${money(amount)}</strong></td></tr>
+          </tbody>
+        </table>
+        <p style="margin:16px 0 0;color:#666">Sent automatically from Cashier.</p>
+      </div>
     `;
 
     await sendEmail({
-      subject: `Daily Sales Report - ${date}`,
+      subject: `In-Shop Sales – ${when} – ${money(amount)}`,
       html,
     });
 
-    res.json({ success: true, message: "Sales report email sent successfully" });
-  } catch (err) {
-    console.error("❌ Error sending sales report:", err.message);
-    res.status(500).json({ error: "Failed to send sales report" });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("Sales report email error:", e?.message || e);
+    res.status(500).json({ error: "Failed to send email" });
   }
 });
 
