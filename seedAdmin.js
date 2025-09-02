@@ -1,42 +1,39 @@
-// seedAdmin.js
+// backend/seedAdmin.js
+import "dotenv/config";
 import mongoose from "mongoose";
-import bcrypt from "bcryptjs";
-import dotenv from "dotenv";
-import Admin from "./models/Admin.js"; // ✅ use Admin model
+import bcrypt from "bcrypt";
+import Admin from "./models/Admin.js";
 
-dotenv.config();
-
-async function seedAdmin() {
+async function main() {
   try {
-    await mongoose.connect(process.env.MONGO_URI);
+    const uri = process.env.MONGO_URI;
+    if (!uri) throw new Error("MONGO_URI missing");
+
+    await mongoose.connect(uri);
+    console.log("✅ Connected to Mongo");
 
     const email = "chickenandriceltd@gmail.com";
-    const plainPassword = "@Business25";
+    const password = "@Business25";
 
-    // Check if already exists
-    let admin = await Admin.findOne({ email });
-
-    if (admin) {
-      console.log("⚠️ Admin already exists:", email);
+    const existing = await Admin.findOne({ email: email.toLowerCase() });
+    if (existing) {
+      console.log("⚠️ Admin already exists:", existing.email);
       process.exit(0);
     }
 
-    const hashedPassword = await bcrypt.hash(plainPassword, 10);
-
-    admin = new Admin({
+    const hashed = await bcrypt.hash(password, 10);
+    const admin = await Admin.create({
       name: "Admin",
-      email,
-      password: hashedPassword,
-      role: "admin"
+      email: email.toLowerCase(),
+      password: hashed,
+      role: "admin",
     });
 
-    await admin.save();
-    console.log("✅ Admin seeded:", email);
+    console.log("✅ Admin created:", admin.email);
     process.exit(0);
-  } catch (err) {
-    console.error("❌ Error seeding admin:", err.message);
+  } catch (e) {
+    console.error("❌ Seed error:", e.message);
     process.exit(1);
   }
 }
-
-seedAdmin();
+main();
