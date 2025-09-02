@@ -9,6 +9,11 @@ import Order from "../models/Order.js";
 
 const router = express.Router();
 
+// ---- Helpers ----
+const normalizeEmail = (e = "") => String(e || "").toLowerCase().trim();
+const JWT_SECRET =
+  process.env.JWT_SECRET || (process.env.NODE_ENV !== "production" ? "dev_secret" : "");
+
 // 🔐 Auth Middleware
 function auth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -18,8 +23,11 @@ function auth(req, res, next) {
   if (!token) return res.status(401).json({ message: "Unauthorized" });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; // attach decoded info (id + role)
+    if (!JWT_SECRET) {
+      return res.status(500).json({ message: "Server config error (JWT_SECRET missing)" });
+    }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded; // { id, role, iat, exp }
     next();
   } catch (err) {
     return res.status(401).json({ message: "Invalid or expired token" });
@@ -52,13 +60,17 @@ const pickSmartDeliveryman = async (excludeId = null) => {
 
 // 📌 Auto-assign pending orders
 const autoAssignPendingOrders = async () => {
-  const pendingOrders = await Order.find({ status: "pending" }).sort({ createdAt: 1 });
-  for (const order of pendingOrders) {
-    const deliveryman = await pickSmartDeliveryman();
-    if (!deliveryman) break;
-    order.assignedTo = deliveryman._id;
-    order.status = "assigned";
-    await order.save();
+  try {
+    const pendingOrders = await Order.find({ status: "pending" }).sort({ createdAt: 1 });
+    for (const order of pendingOrders) {
+      const deliveryman = await pickSmartDeliveryman();
+      if (!deliveryman) break;
+      order.assignedTo = deliveryman._id;
+      order.status = "assigned";
+      await order.save();
+    }
+  } catch (e) {
+    console.error("autoAssignPendingOrders error:", e);
   }
 };
 
@@ -67,19 +79,20 @@ const autoAssignPendingOrders = async () => {
 // ================================
 router.post("/signup", async (req, res) => {
   try {
-    const { name, email, phone, password, address, dateOfBirth } = req.body;
+    const { name, email, phone, password, address, dateOfBirth } = req.body || {};
     if (!name || !email || !phone || !password || !address) {
       return res.status(400).json({ message: "All required fields must be filled" });
     }
 
-    const existing = await Deliveryman.findOne({ email });
+    const safeEmail = normalizeEmail(email);
+    const existing = await Deliveryman.findOne({ email: safeEmail });
     if (existing) return res.status(400).json({ message: "Email already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const newDeliveryman = new Deliveryman({
       name,
-      email,
+      email: safeEmail,
       phone,
       password: hashedPassword,
       address,
@@ -90,9 +103,14 @@ router.post("/signup", async (req, res) => {
 
     await newDeliveryman.save();
 
+    if (!JWT_SECRET) {
+      console.error("JWT_SECRET is not set");
+      return res.status(500).json({ message: "Server config error (JWT)" });
+    }
+
     const token = jwt.sign(
       { id: newDeliveryman._id, role: newDeliveryman.role },
-      process.env.JWT_SECRET,
+      JWT_SECRET,
       { expiresIn: "1d" }
     );
 
@@ -102,6 +120,7 @@ router.post("/signup", async (req, res) => {
       user: { ...newDeliveryman.toObject(), password: undefined },
     });
   } catch (error) {
+    console.error("Signup error:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -111,16 +130,31 @@ router.post("/signup", async (req, res) => {
 // ================================
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const deliveryman = await Deliveryman.findOne({ email });
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
+
+    const safeEmail = normalizeEmail(email);
+    const deliveryman = await Deliveryman.findOne({ email: safeEmail });
     if (!deliveryman) return res.status(404).json({ message: "Not found" });
 
-    const match = await bcrypt.compare(password, deliveryman.password);
+    if (!deliveryman.password) {
+      // Handle legacy records without password
+      return res.status(500).json({ message: "Account not configured for password login" });
+    }
+
+    const match = await bcrypt.compare(String(password), String(deliveryman.password));
     if (!match) return res.status(401).json({ message: "Invalid credentials" });
 
+    if (!JWT_SECRET) {
+      console.error("JWT_SECRET is not set");
+      return res.status(500).json({ message: "Server config error (JWT)" });
+    }
+
     const token = jwt.sign(
-      { id: deliveryman._id, role: deliveryman.role },
-      process.env.JWT_SECRET,
+      { id: deliveryman._id, role: deliveryman.role || "deliveryman" },
+      JWT_SECRET,
       { expiresIn: "1d" }
     );
 
@@ -134,6 +168,7 @@ router.post("/login", async (req, res) => {
 
     res.json({ token, user: updatedDeliveryman.toObject() });
   } catch (err) {
+    console.error("Delivery login error:", err);
     res.status(500).json({ message: "Server error during login" });
   }
 });
@@ -156,10 +191,10 @@ router.post("/logout", auth, async (req, res) => {
 // 📌 Toggle Online/Offline
 router.put("/status", auth, async (req, res) => {
   try {
-    const { isOnline } = req.body;
+    const { isOnline } = req.body || {};
     const deliveryman = await Deliveryman.findByIdAndUpdate(
       req.user.id,
-      { isOnline },
+      { isOnline: Boolean(isOnline) },
       { new: true }
     ).select("-password");
     if (!deliveryman) return res.status(404).json({ message: "Not found" });
@@ -183,14 +218,9 @@ router.get("/profile", auth, async (req, res) => {
   }
 });
 
-
-
 // ================================
 // 📌 Order Actions
 // ================================
-
-// Accept order → stays "assigned"
-
 router.post("/orders/:id/accept", auth, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id).populate("assignedTo", "name phone email");
@@ -198,8 +228,6 @@ router.post("/orders/:id/accept", auth, async (req, res) => {
     if (String(order.assignedTo?._id) !== req.user.id) {
       return res.status(403).json({ message: "Not your order" });
     }
-
-    // ✅ Move to accepted state
     order.status = "accepted";
     await order.save();
     res.json(order);
@@ -208,7 +236,6 @@ router.post("/orders/:id/accept", auth, async (req, res) => {
   }
 });
 
-// Decline order → reassign or fallback to pending
 router.post("/orders/:id/decline", auth, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -234,7 +261,6 @@ router.post("/orders/:id/decline", auth, async (req, res) => {
   }
 });
 
-// Mark In-Transit
 router.post("/orders/:id/in-transit", auth, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -250,7 +276,6 @@ router.post("/orders/:id/in-transit", auth, async (req, res) => {
   }
 });
 
-// Mark Delivered
 router.post("/orders/:id/deliver", auth, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -267,7 +292,7 @@ router.post("/orders/:id/deliver", auth, async (req, res) => {
 });
 
 // ================================
-// 📌 Get all delivered orders for this deliveryman
+// 📌 Order lists
 // ================================
 router.get("/orders/history", auth, async (req, res) => {
   try {
@@ -282,24 +307,18 @@ router.get("/orders/history", auth, async (req, res) => {
   }
 });
 
-
-
-
-// 📌 Get all active (non-delivered) orders assigned to logged-in deliveryman
 router.get("/orders/assigned", auth, async (req, res) => {
   try {
     const orders = await Order.find({
       assignedTo: req.user.id,
       status: { $in: ["assigned", "in-transit"] }
     }).sort({ createdAt: -1 });
-    res.json(orders);
+  res.json(orders);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-// ================================
-// 📌 Get all deliverymen (admin view)
 // ================================
 router.get("/all", async (req, res) => {
   try {
@@ -309,6 +328,5 @@ router.get("/all", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-
 
 export default router;

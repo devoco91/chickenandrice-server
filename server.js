@@ -1,5 +1,5 @@
 // server.js
-import "dotenv/config"; // <-- load env FIRST, before other imports that read process.env
+import "dotenv/config"; // Load env FIRST
 
 import express from "express";
 import mongoose from "mongoose";
@@ -10,13 +10,14 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import nodemailer from "nodemailer";
 
-import { upload } from "./middleware/upload.js"; // used for /__diag/upload
+import { upload } from "./middleware/upload.js";
 
 // Routes
 import foodRoutes from "./routes/foodRoutes.js";
 import orderRoutes from "./routes/orders.js";
 import deliverymanRoutes from "./routes/deliverymanRoutes.js";
 import checkMealRoutes from "./routes/checkMeal.js";
+// ❗ Ensure this matches the file you showed earlier:
 import adminAuthRoutes from "./routes/auth.js";
 import foodPopRoutes from "./routes/foodPopRoutes.js";
 import drinkPopRoutes from "./routes/drinkPopRoutes.js";
@@ -26,8 +27,11 @@ import drinkRoutes from "./routes/drinkRoutes.js";
 
 const app = express();
 
-// ===== Middleware =====
-app.use(express.json());
+// ===== Basics / Hardening =====
+app.set("trust proxy", 1);
+
+// JSON/body parsing MUST come before routes
+app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // ===== CORS setup =====
@@ -47,7 +51,9 @@ app.use(
       if (
         allowedOrigins.includes(origin) ||
         allowedOrigins.some((o) => o instanceof RegExp && o.test(origin))
-      ) return cb(null, true);
+      ) {
+        return cb(null, true);
+      }
       console.error("❌ Blocked by CORS:", origin);
       return cb(new Error("Not allowed by CORS: " + origin));
     },
@@ -88,17 +94,22 @@ app.use(
   express.static(LEGACY_DIR, { etag: true, maxAge: "365d", immutable: true })
 );
 
-// ===== Diagnostics (temporary) =====
+// ===== Health / Diagnostics =====
+app.get("/healthz", (_req, res) => {
+  const ok = Boolean(process.env.MONGO_URI) && Boolean(process.env.JWT_SECRET);
+  res.json({
+    ok,
+    mongoUriConfigured: Boolean(process.env.MONGO_URI),
+    jwtConfigured: Boolean(process.env.JWT_SECRET),
+    uploadDir: UPLOAD_DIR,
+  });
+});
+
 app.get("/__uploads", (_req, res) => {
   try {
     const volumeFiles = fs.existsSync(UPLOAD_DIR) ? fs.readdirSync(UPLOAD_DIR) : [];
     const legacyFiles = fs.existsSync(LEGACY_DIR) ? fs.readdirSync(LEGACY_DIR) : [];
-    res.json({
-      uploadDir: UPLOAD_DIR,
-      volumeFiles,
-      legacyDir: LEGACY_DIR,
-      legacyFiles,
-    });
+    res.json({ uploadDir: UPLOAD_DIR, volumeFiles, legacyDir: LEGACY_DIR, legacyFiles });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -123,6 +134,12 @@ app.post("/__diag/upload", upload.single("file"), (req, res) => {
 });
 
 // ===== MongoDB connect =====
+if (!process.env.MONGO_URI) {
+  console.error("❌ MONGO_URI is not set");
+}
+if (!process.env.JWT_SECRET) {
+  console.warn("⚠️  JWT_SECRET is not set — login will fail in production");
+}
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
@@ -131,7 +148,7 @@ mongoose
     process.exit(1);
   });
 
-// ===== Routes =====
+// ===== Root & Protected test =====
 app.get("/", (_req, res) => {
   res.json({ message: "Welcome to Chicken & Rice API 🍚🍗" });
 });
@@ -146,11 +163,12 @@ app.get("/api/protected", (req, res) => {
   });
 });
 
+// ===== Routes =====
 app.use("/api/foods", foodRoutes);
 app.use("/api/orders", orderRoutes);
-app.use("/api/delivery", deliverymanRoutes);
+app.use("/api/delivery", deliverymanRoutes); // /login, /signup, etc.
 app.use("/api/check-meal", checkMealRoutes);
-app.use("/api/admin", adminAuthRoutes);
+app.use("/api/admin", adminAuthRoutes);      // /login
 app.use("/api/foodpop", foodPopRoutes);
 app.use("/api/drinkpop", drinkPopRoutes);
 app.use("/api/proteinpop", proteinPopRoutes);
