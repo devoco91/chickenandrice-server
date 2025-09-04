@@ -23,6 +23,10 @@ import proteinPopRoutes from "./routes/proteinPopRoutes.js";
 import emailRoutes from "./routes/emailRoutes.js";
 import drinkRoutes from "./routes/drinkRoutes.js";
 
+// NEW
+import inventoryRoutes from "./routes/inventory.js";
+import InventoryItem from "./models/InventoryItem.js"; // for a harmless index cleanup on boot
+
 const app = express();
 app.set("trust proxy", 1);
 
@@ -103,7 +107,19 @@ if (!process.env.JWT_SECRET) console.warn("⚠️ JWT_SECRET is not set");
 
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
+  .then(async () => {
+    console.log("✅ MongoDB connected");
+
+    // Remove any accidental old index on "name" to prevent E11000 (harmless if missing)
+    try {
+      const coll = mongoose.connection.db.collection("inventoryitems");
+      const idx = await coll.indexExists("name_1");
+      if (idx) {
+        await coll.dropIndex("name_1");
+        console.log("🧹 Dropped legacy index inventoryitems.name_1");
+      }
+    } catch {}
+  })
   .catch((err) => {
     console.error("❌ MongoDB connection error:", err.message);
     process.exit(1);
@@ -130,14 +146,45 @@ app.use("/api/admin", adminAuthRoutes);
 app.use("/api/foodpop", foodPopRoutes);
 app.use("/api/drinkpop", drinkPopRoutes);
 app.use("/api/proteinpop", proteinPopRoutes);
-app.use("/api/email", emailRoutes);   // <-- sales report + generic
+app.use("/api/email", emailRoutes);
 app.use("/api/drinks", drinkRoutes);
+
+// NEW
+app.use("/api/inventory", inventoryRoutes);
 
 // Error handler
 app.use((err, _req, res, _next) => {
   console.error("⚠️ Server error:", err?.message || err);
   res.status(500).json({ error: "Something went wrong" });
 });
+
+// --- Midnight auto-reset (local server time) ---
+function msToNextMidnight() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(24, 0, 0, 0); // next local midnight
+  return next.getTime() - now.getTime();
+}
+
+async function runDailyReset() {
+  try {
+    // Call the route handler directly to keep logic in one place
+    const { default: inventoryRouter } = await import("./routes/inventory.js");
+    // We can't easily call the router; instead, do what it does:
+    const InventoryMovement = (await import("./models/InventoryMovement.js")).default;
+    const InventoryItem = (await import("./models/InventoryItem.js")).default;
+
+    await InventoryMovement.create({ type: "reset", sku: "ALL", slug: "all", unit: "piece", note: "Daily reset" });
+    await InventoryItem.deleteMany({});
+    await InventoryMovement.deleteMany({});
+    console.log("🕛 Inventory auto-reset completed.");
+  } catch (e) {
+    console.error("Auto-reset failed:", e?.message || e);
+  } finally {
+    setTimeout(runDailyReset, msToNextMidnight());
+  }
+}
+setTimeout(runDailyReset, msToNextMidnight());
 
 const PORT = process.env.PORT || 5000; // 5000 to avoid Next dev conflict
 app.listen(PORT, "0.0.0.0", () => {
