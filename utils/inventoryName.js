@@ -1,28 +1,55 @@
 // backend/utils/inventoryName.js
+
+// Normalize any name to a compact, comparable slug
 export function normalizeSlug(s = "") {
-  // lower-case, remove spaces/underscores/hyphens/punctuation
   return String(s)
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "") // accents
-    .replace(/[^a-z0-9]+/g, "")      // keep only a-z0-9
+    .replace(/[\u0300-\u036f]/g, "") // strip accents
+    .replace(/[^a-z0-9]+/g, "")      // keep only a–z and 0–9
     .trim();
 }
 
-// base slug removes "extra" and "half" so they collapse into the same stock
+// Base slug collapses "extra/half" so both map to same food stock
 export function baseFoodSlug(s = "") {
   const raw = normalizeSlug(s);
-  return raw.replace(/(?:extra|half)/g, ""); // friedriceextra -> friedrice
+  return raw.replace(/(?:extra|half)/g, "");
 }
 
+/**
+ * Heuristics
+ * - Moi-moi, Plantain, Pack are FOOD sold in PIECES
+ * - Drinks are PIECES
+ * - Proteins (chicken/turkey/fish/…) are PIECES
+ */
+const PIECE_FOOD_TOKENS = /(moimoi|moi|moi-?moi|plantain|dodo|pack|packs)/;
+const DRINK_TOKENS =
+  /(coke|pepsi|fanta|sprite|water|malt|mirinda|schweppes|soda|drink|juice|bottle|can)/;
+const PROTEIN_TOKENS =
+  /(chicken|beef|goat|turkey|fish|meat|protein|gizzard|ponmo|shaki|kote|cowleg|egg)/;
+
+// infer "kind" only when the item isn't configured yet
+export function inferKind(name = "") {
+  const sl = normalizeSlug(name);
+  if (PIECE_FOOD_TOKENS.test(sl)) return "food";
+  if (PROTEIN_TOKENS.test(sl)) return "protein";
+  if (DRINK_TOKENS.test(sl)) return "drink";
+  return "food"; // default bucket
+}
+
+// decide PIECE vs GRAM for unknown items
 export function isPieceByHeuristic(name = "") {
   const sl = normalizeSlug(name);
-  // treat moi-moi/moimoi/moi and plantain/dodo as pieces (not grams)
-  return /(moimoi|moimo|moi|moimo|moimois|plantain|dodo)/.test(sl);
+  return (
+    PIECE_FOOD_TOKENS.test(sl) ||
+    DRINK_TOKENS.test(sl) ||
+    PROTEIN_TOKENS.test(sl)
+  );
 }
 
+// Plate sizes for foods sold by weight
 export function gramsForFoodName(name = "") {
   const sl = normalizeSlug(name);
-  // any "extra" or "half" gets 175 g, otherwise a full plate 350 g
+  // "extra" or "half" => 175g, full plate => 350g
   return /(extra|half)/.test(sl) ? 175 : 350;
 }

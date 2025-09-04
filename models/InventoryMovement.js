@@ -5,13 +5,14 @@ const movementSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ["create", "edit", "delete", "reset"], // no amounts now
+      // extended to include stock entry ops
+      enum: ["create", "edit", "delete", "reset", "add", "edit_stock", "delete_stock"],
       required: true,
     },
     sku: { type: String, required: true },     // display name (from item.name)
     slug: { type: String, required: true },    // canonical slug
     unit: { type: String, enum: ["gram", "piece"], required: true },
-    note: { type: String, default: "" },       // optional details (e.g. field changes)
+    note: { type: String, default: "" },       // optional details (e.g. field changes or qty)
   },
   { timestamps: true }
 );

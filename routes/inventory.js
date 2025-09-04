@@ -3,7 +3,13 @@ import express from "express";
 import InventoryItem from "../models/InventoryItem.js";
 import InventoryMovement from "../models/InventoryMovement.js";
 import Order from "../models/Order.js";
-import { normalizeSlug, baseFoodSlug, gramsForFoodName, isPieceByHeuristic } from "../utils/inventoryName.js";
+import {
+  normalizeSlug,
+  baseFoodSlug,
+  gramsForFoodName,
+  isPieceByHeuristic,
+  inferKind, // NEW
+} from "../utils/inventoryName.js";
 
 const router = express.Router();
 
@@ -51,7 +57,6 @@ router.post("/items", async (req, res) => {
 
     res.json(doc);
   } catch (e) {
-    // Friendly duplicate response if slug already exists in a race
     if (String(e?.code) === "11000") {
       return res.status(409).json({ error: "Item already exists." });
     }
@@ -137,7 +142,7 @@ router.get("/movements", async (req, res) => {
   }
 });
 
-// --- summary (no 'added' column anymore). Instore only. Clamp remaining to >= 0
+// --- summary (instore only). Remaining clamped to 0 because we only show usage here
 router.get("/summary", async (_req, res) => {
   try {
     const start = new Date();
@@ -145,9 +150,9 @@ router.get("/summary", async (_req, res) => {
 
     const { items, aliasToSlug, bySlug } = await buildAliasMap();
 
-    // used accumulators
-    const usedGram = new Map();   // slug -> grams used
-    const usedPiece = new Map();  // slug -> pieces used
+    // usage accumulators
+    const usedGram = new Map();   // slug -> grams used (foods by weight)
+    const usedPiece = new Map();  // slug -> pieces used (drinks, proteins, piece-foods)
 
     // IN-STORE orders only, from today
     const orders = await Order.find({
@@ -161,76 +166,68 @@ router.get("/summary", async (_req, res) => {
         const qty = Number(it?.quantity ?? 0) || 0;
         if (!qty) continue;
 
-        // try match inventory by alias/slug
         const rawName = String(it?.name || "");
         const sl = normalizeSlug(rawName);
         const base = baseFoodSlug(rawName);
         const canonical = aliasToSlug.get(sl) || aliasToSlug.get(base) || sl;
 
-        // decide unit: prefer item’s configured unit/kind if defined
+        // prefer configured unit; otherwise infer piece vs gram
         const meta = bySlug.get(canonical);
         let unit = meta?.unit;
-
-        // fallback heuristics if not configured yet
-        if (!unit) {
-          unit = isPieceByHeuristic(rawName) ? "piece" : "gram";
-        }
+        if (!unit) unit = isPieceByHeuristic(rawName) ? "piece" : "gram";
 
         if (unit === "piece") {
           usedPiece.set(canonical, (usedPiece.get(canonical) || 0) + qty);
         } else {
-          const grams = gramsForFoodName(rawName) * qty; // 350g vs 175g
+          const grams = gramsForFoodName(rawName) * qty; // 350g or 175g
           usedGram.set(canonical, (usedGram.get(canonical) || 0) + grams);
         }
       }
     }
 
-    // prepare rows grouped by category (food/drink/protein) based on configured items
-    const foodRows = [];
+    // prepare rows grouped by category (food/drink/protein)
+    const foodRows = [];     // includes gram foods AND piece-foods (moi-moi, plantain)
     const drinkRows = [];
     const proteinRows = [];
 
-    const pushRow = (arr, slug, name, unit, used) => {
+    const pushRow = (arr, slug, name, unit, used, kind) => {
       arr.push({
         _id: bySlug.get(slug)?._id || null,
         sku: name,
         slug,
-        unit,
+        unit,               // 'gram' or 'piece'
         used: used || 0,
-        remaining: 0, // no "added" tracked; clamp >= 0
+        remaining: 0,
+        kind: kind || bySlug.get(slug)?.kind || null,
       });
     };
 
-    // First: all configured items
+    // First: all configured items (trust their kind + unit)
     for (const it of items) {
-      if (it.unit === "gram") {
-        pushRow(foodRows, it.slug, it.name, it.unit, usedGram.get(it.slug) || 0);
+      if (it.kind === "food") {
+        const used = (it.unit === "gram" ? usedGram.get(it.slug) : usedPiece.get(it.slug)) || 0;
+        pushRow(foodRows, it.slug, it.name, it.unit, used, "food");
       } else if (it.kind === "drink") {
-        pushRow(drinkRows, it.slug, it.name, it.unit, usedPiece.get(it.slug) || 0);
+        pushRow(drinkRows, it.slug, it.name, it.unit, usedPiece.get(it.slug) || 0, "drink");
       } else {
-        pushRow(proteinRows, it.slug, it.name, it.unit, usedPiece.get(it.slug) || 0);
+        pushRow(proteinRows, it.slug, it.name, it.unit, usedPiece.get(it.slug) || 0, "protein");
       }
       usedGram.delete(it.slug);
       usedPiece.delete(it.slug);
     }
 
-    // Then: any leftovers (used but not yet configured) — we infer unit by heuristic
+    // Then: leftovers (used but not configured) — infer bucket
     for (const [slug, grams] of usedGram.entries()) {
-      pushRow(foodRows, slug, slug, "gram", grams);
+      pushRow(foodRows, slug, slug, "gram", grams, "food");
     }
     for (const [slug, pcs] of usedPiece.entries()) {
-      // if heuristic says piece, decide bucket: assume drink unless known 'protein' words
-      const asName = slug; // display raw slug if we don't know proper name
-      const looksProtein = /(chicken|beef|goat|turkey|fish|meat|protein)/.test(slug);
-      if (looksProtein) pushRow(proteinRows, slug, asName, "piece", pcs);
-      else pushRow(drinkRows, slug, asName, "piece", pcs);
+      const k = inferKind(slug);
+      if (k === "protein") pushRow(proteinRows, slug, slug, "piece", pcs, "protein");
+      else if (k === "drink") pushRow(drinkRows, slug, slug, "piece", pcs, "drink");
+      else pushRow(foodRows, slug, slug, "piece", pcs, "food"); // moi-moi / plantain
     }
 
-    res.json({
-      food: foodRows,
-      drinks: drinkRows,
-      proteins: proteinRows,
-    });
+    res.json({ food: foodRows, drinks: drinkRows, proteins: proteinRows });
   } catch (e) {
     res.status(500).json({ error: e.message || "Failed to compute summary" });
   }
