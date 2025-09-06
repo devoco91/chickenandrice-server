@@ -108,8 +108,7 @@ mongoose
   .connect(process.env.MONGO_URI)
   .then(async () => {
     console.log("✅ MongoDB connected");
-
-    // Remove any accidental old index on "name" to prevent E11000 (harmless if missing)
+    // Remove legacy index on name to avoid E11000
     try {
       const coll = mongoose.connection.db.collection("inventoryitems");
       const idx = await coll.indexExists("name_1");
@@ -157,10 +156,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: "Something went wrong" });
 });
 
-// ⛔️ Inventory auto-reset removed on purpose.
-// (Keep your other pages’ reset logic wherever they live.)
-
-const PORT = process.env.PORT || 5000; // 5000 to avoid Next dev conflict
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
