@@ -1,28 +1,28 @@
 // backend/models/InventoryStock.js
 import mongoose from "mongoose";
 
-const inventoryStockSchema = new mongoose.Schema(
+const stockSchema = new mongoose.Schema(
   {
-    // Canonical item reference
+    // Display name as chosen when restocking
+    sku: { type: String, required: true },
+
+    // Canonical slug (matches InventoryItem.slug)
     slug: { type: String, required: true, index: true },
-    sku: { type: String, required: true }, // display name at time of entry
+
+    // 'gram' | 'piece' (must match the item’s unit)
     unit: { type: String, enum: ["gram", "piece"], required: true },
 
-    // Quantity added in this single entry (e.g., 1000 grams, or 24 pieces)
+    // Quantity added to stock (grams or pieces)
     qty: { type: Number, required: true, min: 0 },
 
-    // YYYY-MM-DD for Africa/Lagos (fast grouping)
-    dayKey: { type: String, required: true, index: true },
-
+    // Optional note (e.g. Morning prep, 2pm restock)
     note: { type: String, default: "" },
   },
   { timestamps: true }
 );
 
-inventoryStockSchema.index({ dayKey: 1, slug: 1 });
-inventoryStockSchema.index({ createdAt: -1 });
+stockSchema.index({ slug: 1, createdAt: -1 });
 
 const InventoryStock =
-  mongoose.models.InventoryStock || mongoose.model("InventoryStock", inventoryStockSchema);
-
+  mongoose.models.InventoryStock || mongoose.model("InventoryStock", stockSchema);
 export default InventoryStock;

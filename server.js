@@ -66,21 +66,11 @@ const __dirname = path.dirname(__filename);
 const UPLOAD_DIR = (process.env.UPLOAD_DIR || "/data/uploads").replace(/\\/g, "/");
 const LEGACY_DIR = path.join(__dirname, "uploads");
 
-try {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-} catch {}
-try {
-  fs.mkdirSync(LEGACY_DIR, { recursive: true });
-} catch {}
+try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch {}
+try { fs.mkdirSync(LEGACY_DIR, { recursive: true }); } catch {}
 
-app.use(
-  "/uploads",
-  express.static(UPLOAD_DIR, { etag: true, maxAge: "365d", immutable: true })
-);
-app.use(
-  "/uploads",
-  express.static(LEGACY_DIR, { etag: true, maxAge: "365d", immutable: true })
-);
+app.use("/uploads", express.static(UPLOAD_DIR, { etag: true, maxAge: "365d", immutable: true }));
+app.use("/uploads", express.static(LEGACY_DIR, { etag: true, maxAge: "365d", immutable: true }));
 
 // Health/diagnostics
 app.get("/healthz", (_req, res) => {
@@ -95,12 +85,7 @@ app.get("/healthz", (_req, res) => {
 
 app.get("/__diag/ping", (_req, res) => {
   const canWrite = (() => {
-    try {
-      fs.accessSync(UPLOAD_DIR, fs.constants.W_OK);
-      return true;
-    } catch {
-      return false;
-    }
+    try { fs.accessSync(UPLOAD_DIR, fs.constants.W_OK); return true; } catch { return false; }
   })();
   res.json({ ok: true, uploadDir: UPLOAD_DIR, canWrite });
 });
@@ -172,42 +157,8 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: "Something went wrong" });
 });
 
-// --- Midnight auto-reset (Africa/Lagos) ---
-const TZ = "Africa/Lagos";
-function msToNextLagosMidnight() {
-  const now = new Date();
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const dayKey = fmt.format(now); // YYYY-MM-DD
-  const nextDate = new Date(`${dayKey}T24:00:00+01:00`); // next midnight Lagos
-  return nextDate.getTime() - now.getTime();
-}
-
-async function runDailyReset() {
-  try {
-    const { default: InventoryMovement } = await import("./models/InventoryMovement.js");
-    const { default: InventoryStock } = await import("./models/InventoryStock.js");
-
-    await InventoryMovement.create({
-      type: "reset",
-      sku: "ALL",
-      slug: "all",
-      unit: "piece",
-      note: "Daily reset",
-    });
-    await InventoryStock.deleteMany({});
-    console.log("🕛 Inventory entries cleared for new day (Africa/Lagos).");
-  } catch (e) {
-    console.error("Auto-reset failed:", e?.message || e);
-  } finally {
-    setTimeout(runDailyReset, msToNextLagosMidnight());
-  }
-}
-setTimeout(runDailyReset, msToNextLagosMidnight());
+// ⛔️ Inventory auto-reset removed on purpose.
+// (Keep your other pages’ reset logic wherever they live.)
 
 const PORT = process.env.PORT || 5000; // 5000 to avoid Next dev conflict
 app.listen(PORT, "0.0.0.0", () => {
