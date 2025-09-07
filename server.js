@@ -108,15 +108,48 @@ mongoose
   .connect(process.env.MONGO_URI)
   .then(async () => {
     console.log("✅ MongoDB connected");
-    // Remove legacy index on name to avoid E11000
+
+    // 🧹 Clean up legacy indexes on `inventoryitems`, then ensure the correct `slug` index exists
     try {
       const coll = mongoose.connection.db.collection("inventoryitems");
-      const idx = await coll.indexExists("name_1");
-      if (idx) {
-        await coll.dropIndex("name_1");
-        console.log("🧹 Dropped legacy index inventoryitems.name_1");
+      const indexes = await coll.indexes();
+
+      const isSlugSingleField = (idx) =>
+        idx &&
+        idx.key &&
+        Object.keys(idx.key).length === 1 &&
+        Object.prototype.hasOwnProperty.call(idx.key, "slug");
+
+      for (const idx of indexes) {
+        if (idx.name === "_id_") continue; // keep default _id
+
+        // Keep a unique single-field slug index if it already exists
+        if (isSlugSingleField(idx) && idx.unique) continue;
+
+        const keys = idx.key ? Object.keys(idx.key) : [];
+
+        // Drop anything that references sku*/name* (sku, skuLower, name, nameLower, etc.)
+        const referencesSkuOrName = keys.some((k) => /^(sku|name)/i.test(k));
+
+        // Also drop a non-unique single-field slug index so we can recreate as unique
+        const nonUniqueSlugSingle = isSlugSingleField(idx) && !idx.unique;
+
+        if (referencesSkuOrName || nonUniqueSlugSingle) {
+          await coll.dropIndex(idx.name);
+          console.log(`🧹 Dropped legacy index inventoryitems.${idx.name} (${JSON.stringify(idx.key)})`);
+        }
       }
-    } catch {}
+
+      // Ensure unique { slug: 1 } index exists
+      const fresh = await coll.indexes();
+      const hasUniqueSlug = fresh.some((i) => isSlugSingleField(i) && i.unique);
+      if (!hasUniqueSlug) {
+        await coll.createIndex({ slug: 1 }, { unique: true, name: "slug_1" });
+        console.log("✅ Ensured unique index inventoryitems.slug_1");
+      }
+    } catch (e) {
+      console.warn("⚠️ Could not clean/ensure indexes on inventoryitems:", e?.message || e);
+    }
   })
   .catch((err) => {
     console.error("❌ MongoDB connection error:", err.message);

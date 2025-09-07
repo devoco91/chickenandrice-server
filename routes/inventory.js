@@ -9,9 +9,8 @@ import {
   baseFoodSlug,
   gramsForFoodName,
   inferKindUnit,
-  isFoodPieceByName,
-  looksProtein,
 } from "../utils/inventoryName.js";
+import { sendEmail } from "../utils/mailer.js";
 
 const router = express.Router();
 
@@ -19,7 +18,7 @@ const router = express.Router();
 async function buildAliasMap() {
   const items = await InventoryItem.find();
   const aliasToSlug = new Map(); // alias => slug
-  const bySlug = new Map();      // slug => item
+  const bySlug = new Map(); // slug => item
   for (const it of items) {
     bySlug.set(it.slug, it);
     aliasToSlug.set(it.slug, it.slug);
@@ -65,13 +64,19 @@ router.post("/items", async (req, res) => {
       { new: true, upsert: true }
     );
 
-    await InventoryMovement.create({
-      type: "create",
-      sku: doc.name,
-      slug: doc.slug,
-      unit: doc.unit,
-      note: "",
-    });
+    // Log only when truly created (avoid noise on plain upserts)
+    try {
+      const existed = await InventoryMovement.exists({ slug: doc.slug, type: "create" });
+      if (!existed) {
+        await InventoryMovement.create({
+          type: "create",
+          sku: doc.name,
+          slug: doc.slug,
+          unit: doc.unit,
+          note: "",
+        });
+      }
+    } catch {}
 
     // optional same-day initial stock
     const q = Number(initialQty || 0);
@@ -176,22 +181,132 @@ router.get("/stock", async (_req, res) => {
   }
 });
 
-// add a stock entry (re-stock)
+// --- robust string normalizers used by the resolver ---
+function looseKey(s = "") {
+  return String(s)
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\s\-_]/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+function maybeBase(s = "") {
+  return baseFoodSlug(s);
+}
+
+// helper to resolve item using itemId | slug | sku (with “base food” and fuzzy matching)
+async function resolveItem({ itemId, slug, sku }) {
+  const { items, aliasToSlug, bySlug } = await buildAliasMap();
+
+  // 1) Direct by itemId
+  if (itemId) {
+    const doc = await InventoryItem.findById(itemId);
+    if (doc) return doc;
+  }
+
+  // 2) Try slug/sku candidates -> alias/base -> bySlug
+  const rawCandidates = [];
+  if (slug) rawCandidates.push(String(slug));
+  if (sku) rawCandidates.push(String(sku));
+
+  const normCandidates = [];
+  for (const raw of rawCandidates) {
+    normCandidates.push(normalizeSlug(raw));
+    normCandidates.push(normalizeSlug(maybeBase(raw)));
+    normCandidates.push(looseKey(raw));
+  }
+
+  for (const c of normCandidates) {
+    const canonical = aliasToSlug.get(c) || aliasToSlug.get(maybeBase(c)) || c;
+    const it = bySlug.get(canonical);
+    if (it) return it;
+  }
+
+  // 3) Fallback: loose equality map (case/space insensitive)
+  const byLoose = new Map();
+  for (const it of items) {
+    byLoose.set(looseKey(it.name), it);
+    byLoose.set(looseKey(it.slug), it);
+    if (it.kind === "food") byLoose.set(looseKey(maybeBase(it.name)), it);
+  }
+  for (const c of rawCandidates) {
+    const lk = looseKey(c);
+    const baseLk = looseKey(maybeBase(c));
+    if (byLoose.has(lk)) return byLoose.get(lk);
+    if (byLoose.has(baseLk)) return byLoose.get(baseLk);
+  }
+
+  // 4) Last resort: partial contains
+  for (const c of rawCandidates) {
+    const lk = looseKey(c);
+    for (const it of items) {
+      const nameKey = looseKey(it.name);
+      const slugKey = looseKey(it.slug);
+      if (nameKey.includes(lk) || lk.includes(nameKey) || slugKey.includes(lk) || lk.includes(slugKey)) {
+        return it;
+      }
+    }
+  }
+
+  return null;
+}
+
 // Add/Restock quantity for an item
+// Accepts: { itemId? , slug? , sku? , qty , note? , kind? , unit? }
+// If not found and sku is provided, auto-create the item using provided kind/unit or inferred.
 router.post("/stock", async (req, res) => {
   try {
-    const { sku, qty, note = "" } = req.body || {};
+    const { itemId, slug, sku, qty, note = "", kind: kindIn, unit: unitIn } = req.body || {};
     const n = Number(qty);
-    if (!sku || !Number.isFinite(n) || n <= 0) {
-      return res.status(400).json({ error: "sku and positive qty are required" });
+    if (!Number.isFinite(n) || n <= 0) {
+      return res.status(400).json({ error: "Positive qty is required" });
     }
 
-    const sl = normalizeSlug(sku);
-    const { aliasToSlug, bySlug } = await buildAliasMap();
-    const canonical = aliasToSlug.get(sl) || sl;
-    const item = bySlug.get(canonical);
-    if (!item) return res.status(404).json({ error: "Item not found. Create it first." });
+    // 1) Try to resolve an existing item first
+    let item = await resolveItem({ itemId, slug, sku });
 
+    // 2) If not found but a name (sku) is given, auto-create a base item safely
+    if (!item && sku) {
+      const typed = String(sku).trim();
+      const slugNorm = normalizeSlug(typed);
+      const baseSlug = normalizeSlug(maybeBase(typed));
+
+      // Prefer existing base item if present
+      item = (await InventoryItem.findOne({ slug: baseSlug })) || (await InventoryItem.findOne({ slug: slugNorm }));
+
+      if (!item) {
+        const inferred = inferKindUnit(typed); // e.g. food/gram ; moimoi → food/piece; chicken → protein/piece
+        const kind = kindIn || inferred.kind;
+        const unit = unitIn || inferred.unit;
+
+        const createName =
+          baseSlug !== slugNorm ? String(typed).replace(/(?:extra|half)/gi, "").trim() || typed : typed;
+
+        item = await InventoryItem.create({
+          name: createName,
+          slug: baseSlug,
+          kind,
+          unit,
+          aliases: [],
+        });
+
+        try {
+          await InventoryMovement.create({
+            type: "create",
+            sku: item.name,
+            slug: item.slug,
+            unit: item.unit,
+            note: "",
+          });
+        } catch {}
+      }
+    }
+
+    if (!item) {
+      return res.status(404).json({ error: "Item not found. Create it first." });
+    }
+
+    // 3) Append today's stock entry
     const doc = await InventoryStock.create({
       sku: item.name,
       slug: item.slug,
@@ -200,20 +315,12 @@ router.post("/stock", async (req, res) => {
       note: note || "",
     });
 
-    await InventoryMovement.create({
-      type: "create",
-      sku: item.name,
-      slug: item.slug,
-      unit: item.unit,
-      note: `+${n} ${item.unit}${note ? ` — ${note}` : ""}`,
-    });
-
+    // Do NOT create a movement here; /movements synthesizes "add" from stock rows (avoids duplicates).
     res.json(doc);
   } catch (e) {
     res.status(500).json({ error: e.message || "Failed to add stock" });
   }
 });
-
 
 // edit a stock entry (qty or note)
 router.patch("/stock/:id", async (req, res) => {
@@ -223,6 +330,8 @@ router.patch("/stock/:id", async (req, res) => {
     const doc = await InventoryStock.findById(id);
     if (!doc) return res.status(404).json({ error: "Not found" });
 
+    const before = { qty: doc.qty, note: doc.note };
+
     if (body.qty != null) {
       const n = Number(body.qty);
       if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "Invalid qty" });
@@ -231,6 +340,20 @@ router.patch("/stock/:id", async (req, res) => {
     if (typeof body.note === "string") doc.note = body.note;
 
     await doc.save();
+
+    // Optional audit entry for stock edits
+    try {
+      await InventoryMovement.create({
+        type: "edit_stock",
+        sku: doc.sku,
+        slug: doc.slug,
+        unit: doc.unit,
+        note: `edit qty:${before.qty}->${doc.qty}${
+          before.note !== doc.note ? `; note:${before.note || ""}->${doc.note || ""}` : ""
+        }`,
+      });
+    } catch {}
+
     res.json(doc);
   } catch (e) {
     res.status(500).json({ error: e.message || "Failed to edit stock entry" });
@@ -241,23 +364,38 @@ router.patch("/stock/:id", async (req, res) => {
 router.delete("/stock/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    const doc = await InventoryStock.findById(id);
     await InventoryStock.deleteOne({ _id: id });
+
+    // Optional audit entry
+    try {
+      if (doc) {
+        await InventoryMovement.create({
+          type: "delete_stock",
+          sku: doc.sku,
+          slug: doc.slug,
+          unit: doc.unit,
+          note: `deleted +${doc.qty} ${doc.unit}${doc.note ? ` — ${doc.note}` : ""}`,
+        });
+      }
+    } catch {}
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message || "Failed to delete stock entry" });
   }
 });
 
-// -------------------- MOVEMENTS (today only; no 'reset') --------------------
+// -------------------- MOVEMENTS (today only) --------------------
 router.get("/movements", async (req, res) => {
   try {
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
     const start = startOfToday();
 
-    // Only today's system movements, exclude 'reset'
+    // System movements + stock edit/delete audit entries
     const sysMoves = await InventoryMovement.find({
       createdAt: { $gte: start },
-      type: { $in: ["create", "edit", "delete"] },
+      type: { $in: ["create", "edit", "delete", "edit_stock", "delete_stock"] },
     })
       .sort({ createdAt: -1 })
       .limit(limit)
@@ -297,7 +435,7 @@ router.get("/summary", async (_req, res) => {
 
     // 1) Added today
     const stock = await InventoryStock.find({ createdAt: { $gte: start } }).lean();
-    const addedGram = new Map();  // slug -> grams added
+    const addedGram = new Map(); // slug -> grams added
     const addedPiece = new Map(); // slug -> pieces added
     for (const s of stock) {
       if (s.unit === "gram") {
@@ -333,7 +471,7 @@ router.get("/summary", async (_req, res) => {
         const unit = meta?.unit || inferKindUnit(raw).unit;
 
         if (unit === "gram") {
-          const grams = gramsForFoodName(raw) * qty;
+          const grams = gramsForFoodName(raw) * qty; // 350g per plate; 175g if 'extra'/'half'
           // count towards base (deduct from stock)
           usedGram.set(canonical, (usedGram.get(canonical) || 0) + grams);
 
@@ -352,7 +490,7 @@ router.get("/summary", async (_req, res) => {
     const drinkRows = [];
     const proteinRows = [];
 
-    const pushRow = (arr, { slug, name, unit, added, used }) => {
+    const pushRow = (arr, { slug, name, unit, added, used, kind }) => {
       const remaining = Math.max(0, Number(added || 0) - Number(used || 0));
       arr.push({
         _id: bySlug.get(slug)?._id || null,
@@ -362,6 +500,7 @@ router.get("/summary", async (_req, res) => {
         added: Number(added || 0),
         used: Number(used || 0),
         remaining,
+        kind: kind || bySlug.get(slug)?.kind || inferKindUnit(name).kind, // include kind for UI
       });
     };
 
@@ -371,12 +510,10 @@ router.get("/summary", async (_req, res) => {
       const unit = it.unit;
       const kind = it.kind;
 
-      const added =
-        unit === "gram" ? (addedGram.get(slug) || 0) : (addedPiece.get(slug) || 0);
-      const used =
-        unit === "gram" ? (usedGram.get(slug) || 0) : (usedPiece.get(slug) || 0);
+      const added = unit === "gram" ? addedGram.get(slug) || 0 : addedPiece.get(slug) || 0;
+      const used = unit === "gram" ? usedGram.get(slug) || 0 : usedPiece.get(slug) || 0;
 
-      const row = { slug, name: it.name, unit, added, used };
+      const row = { slug, name: it.name, unit, added, used, kind };
 
       if (kind === "food") pushRow(foodRows, row);
       else if (kind === "drink") pushRow(drinkRows, row);
@@ -390,18 +527,21 @@ router.get("/summary", async (_req, res) => {
     }
 
     // Any leftovers (used/added for items not configured) — heuristic classification
-    // These show up so you can click to create them quickly.
     for (const [slug, grams] of usedGram.entries()) {
       const inf = inferKindUnit(slug);
-      if (inf.kind === "food") pushRow(foodRows, { slug, name: slug, unit: "gram", added: 0, used: grams });
-      else if (inf.kind === "drink") pushRow(drinkRows, { slug, name: slug, unit: "piece", added: 0, used: 0 });
-      else pushRow(proteinRows, { slug, name: slug, unit: "piece", added: 0, used: 0 });
+      if (inf.kind === "food")
+        pushRow(foodRows, { slug, name: slug, unit: "gram", added: 0, used: grams, kind: "food" });
+      else if (inf.kind === "drink")
+        pushRow(drinkRows, { slug, name: slug, unit: "piece", added: 0, used: 0, kind: "drink" });
+      else pushRow(proteinRows, { slug, name: slug, unit: "piece", added: 0, used: 0, kind: "protein" });
     }
     for (const [slug, pcs] of usedPiece.entries()) {
       const inf = inferKindUnit(slug);
-      if (inf.kind === "food") pushRow(foodRows, { slug, name: slug, unit: "piece", added: 0, used: pcs });
-      else if (inf.kind === "drink") pushRow(drinkRows, { slug, name: slug, unit: "piece", added: 0, used: pcs });
-      else pushRow(proteinRows, { slug, name: slug, unit: "piece", added: 0, used: pcs });
+      if (inf.kind === "food")
+        pushRow(foodRows, { slug, name: slug, unit: "piece", added: 0, used: pcs, kind: "food" });
+      else if (inf.kind === "drink")
+        pushRow(drinkRows, { slug, name: slug, unit: "piece", added: 0, used: pcs, kind: "drink" });
+      else pushRow(proteinRows, { slug, name: slug, unit: "piece", added: 0, used: pcs, kind: "protein" });
     }
 
     // Show “extra/half” informational rows (used-only, no added/remaining)
@@ -414,9 +554,105 @@ router.get("/summary", async (_req, res) => {
         added: 0,
         used: grams,
         remaining: 0,
+        kind: "food",
         _extra: true, // client can choose to dim if desired
       });
     }
+
+    // ---------- LOW STOCK EMAIL ALERTS (once per item per day) ----------
+    try {
+      const alerts = [];
+
+      // helper: check once per day using movements
+      const sentToday = async (slug) => {
+        return !!(await InventoryMovement.exists({
+          type: "low_stock",
+          slug,
+          createdAt: { $gte: start },
+        }));
+      };
+
+      const enqueueAlert = async (row, thresholdLabel) => {
+        // send only for configured items (have _id) to avoid noise
+        if (!row?._id) return;
+        if (await sentToday(row.slug)) return;
+
+        const remainingStr =
+          row.unit === "gram"
+            ? `${Math.round(row.remaining)} g`
+            : `${Math.round(row.remaining)} pcs`;
+
+        const subject = `Low Stock: ${row.sku} – ${remainingStr} left (today)`;
+        const html = `
+          <div style="font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;line-height:1.5;color:#111">
+            <h2 style="margin:0 0 8px">⚠️ Low Stock Alert</h2>
+            <p style="margin:0 0 8px"><strong>Item:</strong> ${row.sku}</p>
+            <p style="margin:0 0 8px"><strong>Remaining today:</strong> ${remainingStr}</p>
+            <p style="margin:0 0 8px"><strong>Rule:</strong> ${thresholdLabel}</p>
+            <p style="margin:12px 0 0;color:#555">This alert is sent once per day per item.</p>
+          </div>
+        `;
+
+        alerts.push(
+          (async () => {
+            try {
+              await sendEmail({ subject, html });
+              await InventoryMovement.create({
+                type: "low_stock",
+                sku: row.sku,
+                slug: row.slug,
+                unit: row.unit,
+                note: `remaining=${Math.round(row.remaining)} (${thresholdLabel})`,
+              });
+              // eslint-disable-next-line no-empty
+            } catch {}
+          })()
+        );
+      };
+
+      const isRice = (name) => {
+        const sl = normalizeSlug(name);
+        return /friedrice|jollofrice|nativerice/.test(sl);
+      };
+      const isMoiMoiOrPlantain = (name) => {
+        const sl = normalizeSlug(name);
+        return /moimoi|moimo|moi|plantain|dodo/.test(sl);
+      };
+
+      // Foods (grams) – only rice variants under 900g
+      for (const row of foodRows) {
+        if (row._extra) continue; // skip display-only extra rows
+        if (row.unit === "gram" && isRice(row.sku) && row.remaining < 900) {
+          await enqueueAlert(row, "Rice (grams) < 900g");
+        }
+      }
+
+      // Foods (pieces) – moimoi or plantain under 3 pcs
+      for (const row of foodRows) {
+        if (row.unit === "piece" && isMoiMoiOrPlantain(row.sku) && row.remaining < 3) {
+          await enqueueAlert(row, "MoiMoi/Plantain < 3 pcs");
+        }
+      }
+
+      // Drinks & Proteins (pieces) – any under 3 pcs
+      for (const row of drinkRows) {
+        if (row.unit === "piece" && row.remaining < 3) {
+          await enqueueAlert(row, "Any Drink < 3 pcs");
+        }
+      }
+      for (const row of proteinRows) {
+        if (row.unit === "piece" && row.remaining < 3) {
+          await enqueueAlert(row, "Any Protein < 3 pcs");
+        }
+      }
+
+      // fire off all pending alerts
+      if (alerts.length) await Promise.allSettled(alerts);
+    } catch (e) {
+      // never fail the summary because of email issues
+      console.warn("Low-stock alert check failed:", e?.message || e);
+    }
+    // ---------- /LOW STOCK EMAIL ALERTS ----------
 
     res.json({ food: foodRows, drinks: drinkRows, proteins: proteinRows });
   } catch (e) {

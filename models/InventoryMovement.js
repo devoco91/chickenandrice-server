@@ -5,8 +5,8 @@ const movementSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      // extended to include stock entry ops
-      enum: ["create", "edit", "delete", "reset", "add", "edit_stock", "delete_stock"],
+      // added "low_stock" for alert logging
+      enum: ["create", "edit", "delete", "reset", "add", "edit_stock", "delete_stock", "low_stock"],
       required: true,
     },
     sku: { type: String, required: true },     // display name (from item.name)
