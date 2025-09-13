@@ -16,7 +16,7 @@ const orderSchema = new mongoose.Schema(
 
     orderType: {
       type: String,
-      enum: ["online", "instore"],
+      enum: ["online", "instore", "chowdeck"], // <-- added "chowdeck"
       default: "online",
     },
 

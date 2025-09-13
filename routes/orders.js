@@ -1,4 +1,6 @@
+// ================================
 // backend/routes/orders.js
+// ================================
 import express from "express";
 import Order from "../models/Order.js";
 import Deliveryman from "../models/Deliveryman.js";
@@ -105,6 +107,12 @@ router.post("/", async (req, res) => {
     if (["cash", "card", "transfer"].includes(rawPM)) paymentMode = rawPM;
     else if (rawPM === "upi") paymentMode = "transfer"; // normalize older clients
 
+    // ---- ADD: force chowdeck payment mode to transfer
+    if (orderType === "chowdeck") {
+      paymentMode = "transfer";
+    }
+    // ---- END ADD
+
     let orderData = {
       items,
       subtotal,
@@ -133,6 +141,7 @@ router.post("/", async (req, res) => {
         location: normalizedLoc,
       };
     } else {
+      // instore and chowdeck: no customer name/address (same handling)
       orderData = {
         ...orderData,
         customerName: body.customerName || "Walk-in Customer",
