@@ -1,4 +1,4 @@
-// backend/utils/inventoryName.js
+// FILE: backend/utils/inventoryName.js
 export function normalizeSlug(s = "") {
   return String(s)
     .toLowerCase()
@@ -17,7 +17,8 @@ export function baseFoodSlug(s = "") {
 // Food counted as PIECES (but still food)
 export function isFoodPieceByName(name = "") {
   const sl = normalizeSlug(name);
-  return /(moimoi|moimo|moi|plantain|dodo|pack|packs)/.test(sl);
+  // Added plastic/plastics as alias of pack(s)
+  return /(moimoi|moimo|moi|plantain|dodo|pack|packs|plastic|plastics)/.test(sl);
 }
 
 export function looksProtein(name = "") {

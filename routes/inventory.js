@@ -1,4 +1,4 @@
-// backend/routes/inventory.js
+// FILE: backend/routes/inventory.js
 import express from "express";
 import InventoryItem from "../models/InventoryItem.js";
 import InventoryMovement from "../models/InventoryMovement.js";
@@ -252,8 +252,6 @@ async function resolveItem({ itemId, slug, sku }) {
 }
 
 // Add/Restock quantity for an item
-// Accepts: { itemId? , slug? , sku? , qty , note? , kind? , unit? }
-// If not found and sku is provided, auto-create the item using provided kind/unit or inferred.
 router.post("/stock", async (req, res) => {
   try {
     const { itemId, slug, sku, qty, note = "", kind: kindIn, unit: unitIn } = req.body || {};
@@ -315,7 +313,7 @@ router.post("/stock", async (req, res) => {
       note: note || "",
     });
 
-    // Do NOT create a movement here; /movements synthesizes "add" from stock rows (avoids duplicates).
+    // Do NOT create a movement here
     res.json(doc);
   } catch (e) {
     res.status(500).json({ error: e.message || "Failed to add stock" });
@@ -427,7 +425,7 @@ router.get("/movements", async (req, res) => {
   }
 });
 
-// -------------------- SUMMARY (today only; in-shop orders only) --------------------
+// -------------------- SUMMARY (today only; ALL orders) --------------------
 router.get("/summary", async (_req, res) => {
   try {
     const start = startOfToday();
@@ -445,14 +443,12 @@ router.get("/summary", async (_req, res) => {
       }
     }
 
-    // 2) Used today (in-shop only)
+    // 2) Used today — include ALL order sources (removed orderType filter)
     const usedGram = new Map();
     const usedPiece = new Map();
-    // also collect “extra/half” rows for display (used only)
     const extraUsedDisplay = new Map(); // extraSlug -> grams used (display only)
 
     const orders = await Order.find({
-      orderType: "instore",
       createdAt: { $gte: start },
     }).select({ items: 1 });
 
