@@ -1,6 +1,11 @@
 // backend/server.js
 import "dotenv/config";
 
+// ---- Timezone pin: ensure startOfToday() uses local shop midnight ----
+// If your platform already sets TZ, this keeps it; otherwise defaults to Africa/Lagos.
+process.env.TZ = process.env.TZ || process.env.INVENTORY_TZ || "Africa/Lagos";
+// ---------------------------------------------------------------------
+
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -99,6 +104,19 @@ app.post("/__diag/upload", upload.single("file"), (req, res) => {
     url: `/uploads/${req.file.filename}`,
   });
 });
+
+// ---- Optional: verify TZ + computed midnight used by startOfToday() ----
+app.get("/__diag/time", (_req, res) => {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0); // uses process.env.TZ
+  res.json({
+    tz: process.env.TZ || "system-default",
+    nowISO: now.toISOString(),
+    startOfTodayISO: start.toISOString(),
+  });
+});
+// -----------------------------------------------------------------------
 
 // Mongo
 if (!process.env.MONGO_URI) console.error("❌ MONGO_URI is not set");
