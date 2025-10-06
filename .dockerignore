@@ -1,6 +1,11 @@
-/.git
-/node_modules
-.dockerignore
+
+# =====================================================================
+# File: .dockerignore                    (ROOT)
+# =====================================================================
+node_modules
+npm-debug.log
+.DS_Store
+.git
+.gitignore
 .env
-Dockerfile
-fly.toml
+*.log
