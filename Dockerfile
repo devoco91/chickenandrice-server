@@ -1,25 +1,32 @@
+# syntax = docker/dockerfile:1
 
-# =====================================================================
-# File: Dockerfile                       (ROOT)
-# =====================================================================
-FROM node:20-alpine
+ARG NODE_VERSION=20.13.1
+FROM node:${NODE_VERSION}-slim AS base
+
+LABEL fly_launch_runtime="Node.js"
 
 WORKDIR /app
-RUN addgroup -S app && adduser -S app -G app
+ENV NODE_ENV="production"
 
-# Install only production deps
-COPY package*.json ./
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
-
-# Copy source
+# ---------- build stage ----------
+FROM base AS build
+RUN apt-get update -qq && \
+    apt-get install --no-install-recommends -y build-essential node-gyp pkg-config python-is-python3
+COPY package-lock.json package.json ./
+RUN npm ci
 COPY . .
 
-ENV NODE_ENV=production
-ENV PORT=8080
-EXPOSE 8080
+# ---------- final image ----------
+FROM base
+# ensure the persistent mount point exists (Fly volume mounts to /data)
+RUN mkdir -p /data/uploads
 
-USER app
-HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
+# bring app + node_modules from build stage
+COPY --from=build /app /app
 
-CMD ["node", "backend/server.js"]
+# (Optional) This is metadata only; matches fly.toml internal_port=5000
+EXPOSE 5000
+
+# Fly will use [processes] command from fly.toml ("npm start")
+# If you run locally with docker run, this will still work:
+CMD ["node", "server.js"]

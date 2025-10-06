@@ -1,6 +1,4 @@
-// # =====================================================================
-// # File: backend/server.js                (YOUR CODE — UNCHANGED)
-// # =====================================================================
+// backend/server.js
 import "dotenv/config";
 
 // ---- Timezone pin: ensure startOfToday() uses local shop midnight ----
