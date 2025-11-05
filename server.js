@@ -27,6 +27,7 @@ import drinkPopRoutes from "./routes/drinkPopRoutes.js";
 import proteinPopRoutes from "./routes/proteinPopRoutes.js";
 import emailRoutes from "./routes/emailRoutes.js";
 import drinkRoutes from "./routes/drinkRoutes.js";
+import facebookRoutes from './routes/facebook.js';
 
 // NEW
 import inventoryRoutes from "./routes/inventory.js";
@@ -197,6 +198,7 @@ app.use("/api/drinkpop", drinkPopRoutes);
 app.use("/api/proteinpop", proteinPopRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/drinks", drinkRoutes);
+app.use('/facebook', facebookRoutes); 
 
 // NEW
 app.use("/api/inventory", inventoryRoutes);
